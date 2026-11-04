@@ -1,0 +1,56 @@
+import { TrackerError } from "./github.mjs";
+import { readRegistry, writeRegistry, textFields } from "./state.mjs";
+import { applyEvent, validateEvent } from "./events.mjs";
+
+function setFields(github, config, itemId, record) {
+  const values = { status: record.status, activity: record.activity, ...Object.fromEntries(Object.keys(textFields).map(key => [key, record[key] ?? null])) };
+  const variables = {};
+  const definitions = [];
+  const operations = [];
+  for (const [index, [key, value]] of Object.entries(values).entries()) {
+    const field = config.fields[key];
+    const clearing = value === null || value === "";
+    definitions.push(`$input${index}:${clearing ? "ClearProjectV2ItemFieldValueInput" : "UpdateProjectV2ItemFieldValueInput"}!`);
+    variables[`input${index}`] = { projectId: config.project.id, itemId, fieldId: field.id, ...(clearing ? {} : { value: field.options ? { singleSelectOptionId: field.options[value] } : { text: String(value) } }) };
+    operations.push(`f${index}:${clearing ? "clearProjectV2ItemFieldValue" : "updateProjectV2ItemFieldValue"}(input:$input${index}){projectV2Item{id}}`);
+  }
+  github.graph(`mutation TrackerSetFields(${definitions.join(",")}){${operations.join(" ")}}`, variables);
+}
+
+export function publishTicket(github, config, record) {
+  const itemId = github.graph(`mutation TrackerAddItem($input:AddProjectV2ItemByIdInput!){addProjectV2ItemById(input:$input){item{id}}}`, { input: { projectId: config.project.id, contentId: record.nodeId } }).addProjectV2ItemById.item.id;
+  github.request(`repos/${config.repository}/issues/${record.number}/assignees`, { method: "POST", body: { assignees: [record.account] } });
+  setFields(github, config, itemId, record);
+  const marker = `<!-- ivat-agent-tracker:ticket:${config.project.id} -->`;
+  const comments = github.pages(`repos/${config.repository}/issues/${record.number}/comments`).filter(comment => comment.body.startsWith(marker));
+  if (comments.length > 1) throw new TrackerError("ticket_comment_ambiguous");
+  const body = `${marker}\n\nAgent tracking: [Project](${config.project.url})\n\n- Run: ${record.runId}; generation ${record.generation}; revision ${record.revision}\n- Agent: ${record.agent}\n- Branch: ${record.branch} (${record.workingRevision})\n- Phase: ${record.status}\n- Activity: ${record.activity}\n- State observed (UTC): ${record.stateAt}\n- Activity observed (UTC): ${record.activityAt ?? "not verified"}\n- Latest result: ${record.result}\n`;
+  if (comments.length) github.request(`repos/${config.repository}/issues/comments/${comments[0].id}`, { method: "PATCH", body: { body } });
+  else github.request(`repos/${config.repository}/issues/${record.number}/comments`, { method: "POST", body: { body } });
+}
+
+export function processWorker(github, config, event, environment = process.env) {
+  if (environment.GITHUB_ACTIONS !== "true" || environment.GITHUB_JOB !== "publish" || !environment.GITHUB_WORKFLOW_REF?.startsWith(`${config.repository}/.github/workflows/${config.workflow}@`)) throw new TrackerError("serialized_worker_required");
+  if (!/^[\w-]+$/.test(environment.GITHUB_ACTOR ?? "")) throw new TrackerError("worker_actor_invalid");
+  validateEvent(event);
+  const { commentId, state } = readRegistry(github, config);
+  const previous = state.receipts[event.id];
+  if (!previous) {
+    try { applyEvent(state, event, { github, config, actor: environment.GITHUB_ACTOR }); }
+    catch (error) {
+      if (!(error instanceof TrackerError) || error.code.startsWith("github_")) throw error;
+      state.receipts[event.id] = { state: "rejected", error: error.code, runId: event.runId, generation: event.generation, sequence: event.sequence, revision: state.revision };
+      writeRegistry(github, config, commentId, state);
+      return { ok: false, error: error.code };
+    }
+    // Canonical intent is durable before any multi-effect Project projection.
+    writeRegistry(github, config, commentId, state);
+  } else if (previous.state === "rejected") return { ok: false, error: previous.error };
+  if (state.publishedRevision < state.revision) {
+    for (const record of Object.values(state.tickets)) publishTicket(github, config, record);
+    state.publishedRevision = state.revision;
+    for (const receipt of Object.values(state.receipts)) if (receipt.state === "pending" && receipt.revision <= state.publishedRevision) receipt.state = "published";
+    writeRegistry(github, config, commentId, state);
+  }
+  return { ok: true, revision: state.revision, synchronized: state.publishedRevision === state.revision };
+}

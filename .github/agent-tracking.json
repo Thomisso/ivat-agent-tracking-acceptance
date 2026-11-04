@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "repository": "Thomisso/ivat-agent-tracking-acceptance",
+  "owner": "Thomisso",
+  "ownerType": "User",
+  "project": {
+    "id": "PVT_kwHOAeJo_s4BqJzA",
+    "title": "iVAT — Agent tracking acceptance",
+    "url": "https://github.com/users/Thomisso/projects/2",
+    "number": 2
+  },
+  "registryIssue": 3,
+  "workflow": "agent-tracking.yml",
+  "codeRef": "main",
+  "fields": {
+    "status": {
+      "id": "PVTSSF_lAHOAeJo_s4BqJzAzhoiJgQ",
+      "name": "Status",
+      "options": {
+        "ready": "d27b38cf",
+        "implementing": "7fa2f56f",
+        "review": "0651130a",
+        "integrated": "71b67561",
+        "done": "8e139621",
+        "blocked": "779e7840",
+        "cancelled": "b49b0b51"
+      }
+    },
+    "activity": {
+      "id": "PVTSSF_lAHOAeJo_s4BqJzAzhoiLbo",
+      "name": "Activity",
+      "options": {
+        "confirmed": "cb6afb01",
+        "unverified": "ac033ec1",
+        "inactive": "024ddda2"
+      }
+    },
+    "agent": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiLb4",
+      "name": "Agent"
+    },
+    "reviewer": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiMxM",
+      "name": "Review agent"
+    },
+    "branch": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiMxQ",
+      "name": "Branch"
+    },
+    "pullRequest": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiMxU",
+      "name": "Implementation PR"
+    },
+    "stateAt": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiMxY",
+      "name": "Confirmed state (UTC)"
+    },
+    "activityAt": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiMyA",
+      "name": "Confirmed activity (UTC)"
+    },
+    "result": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiMyk",
+      "name": "Latest result"
+    },
+    "runId": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiM0A",
+      "name": "Run"
+    },
+    "revision": {
+      "id": "PVTF_lAHOAeJo_s4BqJzAzhoiM0Q",
+      "name": "Revision"
+    }
+  }
+}
