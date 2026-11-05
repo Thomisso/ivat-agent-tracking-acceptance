@@ -1,6 +1,7 @@
+import { parentMetadata } from "./relationships.mjs";
 import { validateActivity, applyActivity, evaluateActivity, beginActivityEpisode } from "./activity.mjs";
 import { finalCommands, validateFinal, applyFinal, reconcileFinalFacts } from "./finalization.mjs";
-import { discoverTickets } from "./discovery.mjs";
+import { discoverTickets, readImplementationIssue } from "./discovery.mjs";
 import { currentParent, dependencyReadiness } from "./evidence.mjs";
 import { lifecycleCommands, validateLifecycle, applyLifecycle } from "./lifecycle.mjs";
 import { TrackerError } from "./github.mjs";
@@ -102,17 +103,17 @@ export function applyEvent(state, event, { github, config, actor }) {
       const requestedContext = event.payload.integrationContext;
       if (existing?.integrationContext && requestedContext && (existing.integrationContext.specification !== requestedContext.specification || existing.integrationContext.branch !== requestedContext.branch)) throw new TrackerError("integration_context_mismatch");
       const integrationContext = existing?.integrationContext ?? requestedContext ?? null;
-      const issue = github.request(`repos/${config.repository}/issues/${event.payload.issue}`);
-      if (issue.pull_request || issue.state !== "open") throw new TrackerError("implementation_issue_required");
+      const issue = readImplementationIssue(github, config, event.payload.issue);
       const observedParent = currentParent(github, config, issue.number);
       const parent = observedParent.number;
+      const relationship = parentMetadata(observedParent);
       if (integrationContext && observedParent.repository !== config.repository) throw new TrackerError("parent_repository_unsupported");
       if (integrationContext && parent !== integrationContext.specification) throw new TrackerError("specification_mismatch");
-      const dependencies = existing ? dependencyReadiness(state, { ...existing, parent, integrationContext }, { github, config }) : null;
-      if (dependencies && !dependencies.ready) throw new TrackerError("implementation_dependencies_unsatisfied");
+      const dependencies = dependencyReadiness(state, { ...existing, number: issue.number, ...relationship, integrationContext }, { github, config });
+      if (!dependencies.ready) throw new TrackerError("implementation_dependencies_unsatisfied");
       state.tickets[issue.number] = {
-        ...existing, ...(dependencies ? { dependencies } : {}),
-        role: "implementation", repository: config.repository, number: issue.number, nodeId: issue.node_id, title: issue.title, url: issue.html_url, parent,
+        ...existing, dependencies,
+        role: "implementation", repository: config.repository, number: issue.number, nodeId: issue.node_id, title: issue.title, url: issue.html_url, ...relationship,
         account: state.owner.account, agent: event.payload.agent, reviewer: historical ? existing.reviewer ?? null : null, branch: event.payload.branch, workingRevision: event.payload.branchRevision,
         integrationContext, pullRequest: historical ? existing.pullRequest ?? null : null, status: historical ? existing.status : "implementing", activity: historical && existing.status !== "implementing" ? "inactive" : "unverified", stateAt: historical ? existing.stateAt : event.at, activityAt: null,
         result: event.payload.result, runId: event.runId, generation: event.generation, revision: state.revision + 1,

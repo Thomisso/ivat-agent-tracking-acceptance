@@ -1,3 +1,5 @@
+import { parentMetadata } from "./relationships.mjs";
+import { readImplementationIssue } from "./discovery.mjs";
 import { beginActivityEpisode, applyActivity, observationTime } from "./activity.mjs";
 import { TrackerError } from "./github.mjs";
 import { localCommit, localAncestor, verifyReviewedTip, remoteAncestor, localIntegration, verifyIntegration, dependencyReadiness, currentParent } from "./evidence.mjs";
@@ -135,20 +137,17 @@ export function applyLifecycle(state, event, { github, config }) {
 function applyReadiness(state, event, { github, config }) {
   const p = event.payload;
   let record = state.tickets[p.issue];
-  if (!record) {
-    const issue = github.request(`repos/${config.repository}/issues/${p.issue}`);
-    if (issue.pull_request || issue.state !== "open") throw new TrackerError("implementation_issue_required");
-    const observedParent = currentParent(github, config, p.issue);
-    if (p.integrationContext && observedParent.repository !== config.repository) throw new TrackerError("parent_repository_unsupported");
-    const parent = observedParent.number;
-    record = { number: issue.number, nodeId: issue.node_id, title: issue.title, url: issue.html_url, parent, role: "implementation", status: "ready", activity: "inactive", runId: null, generation: null, stateAt: event.at, activityAt: null, integrationContext: p.integrationContext };
-  }
-  if (record.role === "specification") throw new TrackerError("implementation_issue_required");
-  if (p.integrationContext && p.integrationContext.specification !== record.parent) throw new TrackerError("specification_mismatch");
+  if (record?.role === "specification") throw new TrackerError("implementation_issue_required");
+  const issue = record ? null : readImplementationIssue(github, config, p.issue);
+  const observedParent = currentParent(github, config, p.issue);
+  if (p.integrationContext && observedParent.repository !== config.repository) throw new TrackerError("parent_repository_unsupported");
+  const relationship = parentMetadata(observedParent);
+  if (!record) record = { number: issue.number, nodeId: issue.node_id, title: issue.title, url: issue.html_url, repository: config.repository, ...relationship, role: "implementation", status: "ready", activity: "inactive", runId: null, generation: null, stateAt: event.at, activityAt: null, integrationContext: p.integrationContext };
+  if (p.integrationContext && p.integrationContext.specification !== relationship.parent) throw new TrackerError("specification_mismatch");
   if (p.integrationContext && record.integrationContext && (p.integrationContext.specification !== record.integrationContext.specification || p.integrationContext.branch !== record.integrationContext.branch)) throw new TrackerError("integration_context_mismatch");
-  const candidate = { ...record, integrationContext: record.integrationContext ?? p.integrationContext };
+  const candidate = { ...record, ...relationship, integrationContext: record.integrationContext ?? p.integrationContext };
   const dependencies = dependencyReadiness(state, candidate, { github, config });
-  Object.assign(record, { integrationContext: candidate.integrationContext, dependencies });
+  Object.assign(record, { ...relationship, integrationContext: candidate.integrationContext, dependencies });
   if (record.status === "ready" || (record.status === "blocked" && record.blockage?.kind === "dependency")) {
     record.status = dependencies.ready ? "ready" : "blocked";
     record.blockage = dependencies.ready ? null : { kind: "dependency", reason: "Implementation dependencies are not satisfied", reference: dependencies.blockers.filter(blocker => !blocker.satisfied).map(blocker => `${blocker.repository}#${blocker.number}`).join(", "), condition: "Every blocker passes same-spec integration or external final merge", resumePhase: "ready", at: event.at };

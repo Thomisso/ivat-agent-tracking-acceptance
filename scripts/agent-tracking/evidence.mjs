@@ -30,13 +30,13 @@ export function remoteAncestor(github, config, base, head) {
 export function currentParent(github, config, number) {
   try {
     const parent = github.request(`repos/${config.repository}/issues/${number}/parent`);
-    return { number: parent.number, repository: blockerRepository(parent, config.repository) };
+    return { number: parent.number, repository: blockerRepository(parent, config.repository), source: "native" };
   } catch (error) {
     if (error.code !== "github_not_found") throw error;
     const issue = github.request(`repos/${config.repository}/issues/${number}`);
     const declaration = parentDeclaration(issue.body ?? "", number);
     if (declaration.unresolved) throw new TrackerError("parent_declaration_unresolved");
-    return { number: declaration.number, repository: config.repository };
+    return { number: declaration.number, repository: config.repository, source: declaration.number === null ? null : "fallback" };
   }
 }
 export function verifyContext(github, config, ticket) {

@@ -1,9 +1,14 @@
 name: Acceptance checks
-on:
+'on':
   push:
-    branches: [main, 'acceptance/**']
+    branches:
+      - main
+      - acceptance/**
   pull_request:
-    types: [opened, synchronize, reopened]
+    types:
+      - opened
+      - synchronize
+      - reopened
 permissions:
   contents: read
 jobs:
@@ -15,11 +20,12 @@ jobs:
       fail-fast: false
       matrix:
         file:
-          - agent-tracker.test.mjs
+          - agent-tracker-activity.test.mjs
+          - agent-tracker-entry.test.mjs
+          - agent-tracker-final.test.mjs
           - agent-tracker-lifecycle.test.mjs
           - agent-tracker-recovery.test.mjs
-          - agent-tracker-activity.test.mjs
-          - agent-tracker-final.test.mjs
+          - agent-tracker.test.mjs
     steps:
       - uses: actions/checkout@v7
         with:

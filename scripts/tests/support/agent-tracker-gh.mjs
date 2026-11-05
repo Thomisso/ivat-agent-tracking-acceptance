@@ -19,7 +19,8 @@ if (injected) {
 let response;
 const parent = number => {
   if ((remote.issues?.[number] && !remote.issues[number].parent && !Object.hasOwn(remote.parents ?? {}, number)) || remote.parents?.[number] === null) { console.error("HTTP 404: Not Found"); process.exit(1); }
-  return remote.issues?.[number]?.parent ?? { number: remote.parents?.[number] ?? 200 };
+  const value = remote.issues?.[number]?.parent ?? { number: remote.parents?.[number] ?? 200 };
+  return { ...value, node_id: value.node_id ?? value.id, html_url: value.html_url ?? value.url, repository_url: value.repository_url ?? `https://api.github.com/repos/${value.repository?.nameWithOwner ?? "example/project"}` };
 };
 if (remote.fail) {
   console.error(remote.fail);
@@ -48,6 +49,11 @@ if (endpoint === "graphql") {
     case "TrackerRestoreDraft": {
       const pr = Object.values(remote.pulls).find(pr => pr.node_id === value.pullRequestId); pr.draft = true;
       response = { convertPullRequestToDraft: { pullRequest: { id: pr.node_id, isDraft: true } } }; break;
+    }
+    case "TrackerMergedPullRequest": {
+      const pr = remote.pulls?.[variables.number];
+      const facts = remote.pullRequestFacts?.[variables.number] ?? (pr ? { id: pr.node_id, number: pr.number, repository: { nameWithOwner: "example/project" }, headRefOid: pr.head.sha, headRefName: pr.head.ref, baseRefName: pr.base.ref, state: pr.merged ? "MERGED" : "OPEN", merged: pr.merged, mergedAt: pr.merged_at, mergeCommit: pr.merge_commit_sha ? { oid: pr.merge_commit_sha } : null } : null);
+      response = { repository: { nameWithOwner: "example/project", pullRequest: facts } }; break;
     }
     case "TrackerFinalMerge": response = { repository: { issue: remote.finalMerges?.[variables.number] ?? { state: "OPEN", stateReason: null, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } }, timelineItems: { nodes: [] } } } }; break;
     case "TrackerDiscovery": {
@@ -141,6 +147,8 @@ if (endpoint === "graphql") {
     delete remote.pushOnPullRead;
   }
   if (!response) { console.error("HTTP 404 Not Found"); process.exit(1); }
+  // REST2026-03-10 removed this field; GraphQL remains a separate proof.
+  response = Object.fromEntries(Object.entries(response).filter(([key]) => key !== "merge_commit_sha"));
 } else if (/^repos\/example\/project\/issues\/\d+\/sub_issues$/.test(endpoint)) {
   response = (remote.subIssues?.[endpoint.split("/")[4]] ?? []).slice((page - 1) * 100, page * 100).map(child => typeof child === "object" ? child : { number: child });
 } else if (/^repos\/example\/project\/issues\/\d+\/dependencies\/blocked_by$/.test(endpoint)) {
@@ -185,6 +193,9 @@ if (endpoint === "graphql") {
   if (injected?.phase === "after") { console.error("simulated connection failure after remote effect"); process.exit(1); }
   console.log(JSON.stringify({ workflow_run_id: 123, run_url: "https://api.github.com/repos/example/project/actions/runs/123", html_url: "https://github.com/example/project/actions/runs/123" }));
   process.exit(0);
+} else if (/^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(endpoint) && remote.foreignIssues?.[`${endpoint.split("/").slice(1, 3).join("/")}#${endpoint.split("/")[4]}`]) {
+  const issue = remote.foreignIssues[`${endpoint.split("/").slice(1, 3).join("/")}#${endpoint.split("/")[4]}`];
+  response = { ...issue, node_id: issue.id, html_url: issue.url, state: issue.state.toLowerCase() };
 } else if (endpoint === "repos/other/repository/issues/200/comments") {
   remote.foreignComments ??= [];
   if (method === "POST") remote.foreignComments.push({ id: 9200, body: input.body });

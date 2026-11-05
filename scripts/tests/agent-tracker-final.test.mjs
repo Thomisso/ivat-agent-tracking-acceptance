@@ -479,3 +479,42 @@ test("target content absent from the checked head refuses fresh and already-read
     { mode: "already_ready", error: "final_target_changed", draft: true, handoff: "refused" },
   ]);
 });
+
+test("current REST merged responses use the corroborated GraphQL result instead of head or later target tip", t => {
+  const repo = prepare(t, false);
+  evidenceComplete(repo);
+  repo.git("checkout", "-b", "actual-result", "main");
+  repo.git("merge", "--squash", "feat/ticket");
+  repo.git("-c", "user.name=Final test", "-c", "user.email=final@example.test", "commit", "-m", "Actual squash result");
+  const result = repo.git("rev-parse", "HEAD");
+  mergeDelivery(repo, [201], result);
+  repo.git("checkout", "-b", "later-target", "main");
+  writeFileSync(path.join(repo.directory, "later.txt"), "Unrelated target work after delivery\n");
+  repo.git("add", "later.txt");
+  repo.git("-c", "user.name=Final test", "-c", "user.email=final@example.test", "commit", "-m", "Later target work");
+  repo.git("branch", "-f", "main", "HEAD");
+  repo.updateRemote(remote => {
+    const pr = remote.pulls[300];
+    remote.pullRequestFacts = { 300: { id: pr.node_id, number: 300, repository: { nameWithOwner: "example/project" }, headRefOid: repo.revision, headRefName: "feat/ticket", baseRefName: "main", state: "MERGED", merged: true, mergedAt: pr.merged_at, mergeCommit: { oid: result } } };
+    delete pr.merge_commit_sha;
+  });
+  execute(repo, "reconcile");
+  const ticket = execute(repo, "show").remote.tickets[201];
+  assert.equal(ticket.status, "done");
+  assert.equal(ticket.final.pullRequest.mergeCommit, result);
+  assert.equal(ticket.delivery.resultCommit, result);
+  assert.equal(ticket.final.checks.revision, repo.revision);
+  assert.equal(ticket.final.checks.appliesTo, result);
+});
+
+test("inconsistent GraphQL merged PR identity cannot establish delivered implementation", t => {
+  const repo = prepare(t, false);
+  evidenceComplete(repo); mergeDelivery(repo);
+  repo.updateRemote(remote => {
+    const pr = remote.pulls[300];
+    remote.pullRequestFacts = { 300: { id: pr.node_id, number: 300, repository: { nameWithOwner: "example/project" }, headRefOid: "f".repeat(40), headRefName: "feat/ticket", baseRefName: "main", state: "MERGED", merged: true, mergedAt: pr.merged_at, mergeCommit: { oid: repo.revision } } };
+  });
+  const reconciliation = repo.run("reconcile");
+  assert.equal(resultJson(reconciliation).error, "final_pr_facts_changed");
+  assert.notEqual(execute(repo, "show").remote.tickets[201].status, "done");
+});

@@ -42,8 +42,23 @@ function readPr(github, config, number, { allowChangedTarget = false } = {}) {
   const pr = github.request(`repos/${config.repository}/pulls/${number}`);
   const repository = github.request(`repos/${config.repository}`);
   if (pr.base.repo.full_name !== config.repository || pr.head.repo?.full_name !== config.repository || (!allowChangedTarget && pr.base.ref !== repository.default_branch)) throw new TrackerError("final_pr_target_invalid");
+  let mergeCommit = null;
+  if (pr.merged) {
+    // REST2026-03-10 removed merge_commit_sha. Bind the independent GraphQL
+    // merged result to this exact repository, PR, head, branch and target.
+    const [owner, name] = config.repository.split("/");
+    const repository = github.graph(`query TrackerMergedPullRequest($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){nameWithOwner pullRequest(number:$number){id number repository{nameWithOwner} headRefOid headRefName baseRefName state merged mergedAt mergeCommit{oid}}}}`, { owner, name, number }).repository;
+    const facts = repository?.pullRequest;
+    const sameRepository = repository?.nameWithOwner?.toLowerCase() === config.repository.toLowerCase() && facts?.repository?.nameWithOwner?.toLowerCase() === config.repository.toLowerCase();
+    const samePullRequest = facts?.id === pr.node_id && facts?.number === number && pr.number === number;
+    const sameHeadAndTarget = facts?.headRefOid === pr.head.sha && facts?.headRefName === pr.head.ref && facts?.baseRefName === pr.base.ref;
+    const sameMerge = facts?.state === "MERGED" && facts.merged === true && pr.merged === true && pr.state === "closed" && Number.isFinite(Date.parse(facts.mergedAt)) && Date.parse(facts.mergedAt) === Date.parse(pr.merged_at);
+    if (!sameRepository || !samePullRequest || !sameHeadAndTarget || !sameMerge) throw new TrackerError("final_pr_facts_changed");
+    if (!/^[a-f0-9]{40}$/.test(facts.mergeCommit?.oid ?? "")) throw new TrackerError("final_merge_required");
+    mergeCommit = facts.mergeCommit.oid;
+  }
   const head = remoteCommit(github, config, pr.head.sha);
-  return { number, url: pr.html_url, nodeId: pr.node_id, branch: pr.head.ref, revision: pr.head.sha, tree: head.commit.tree.sha, target: pr.base.ref, state: pr.merged ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "ready", mergedAt: pr.merged_at, mergeCommit: pr.merged ? pr.merge_commit_sha : null };
+  return { number, url: pr.html_url, nodeId: pr.node_id, branch: pr.head.ref, revision: pr.head.sha, tree: head.commit.tree.sha, target: pr.base.ref, state: pr.merged ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "ready", mergedAt: pr.merged_at, mergeCommit };
 }
 function issueKey(issue, config) {
   const repository = (typeof issue.repository === "string" ? issue.repository : issue.repository?.full_name ?? issue.repository?.nameWithOwner) ?? issue.repository_url?.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)$/)?.[1] ?? issue.html_url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//)?.[1] ?? config.repository;
