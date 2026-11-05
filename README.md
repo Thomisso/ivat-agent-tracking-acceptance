@@ -5,3 +5,5 @@ Private synthetic acceptance environment for Thomisso/iVAT#200. No production Do
 Acceptance marker for synthetic specification 8, ticket 9.
 
 Acceptance marker for standalone ticket 12.
+
+Acceptance marker for standalone delivery ticket 13.
