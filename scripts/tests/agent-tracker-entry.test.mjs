@@ -125,3 +125,23 @@ test("retained work moving to a foreign parent creates only qualified context", 
   assert.equal(state.tickets["other/repository#200"].nodeId, "I_foreign_200");
   assert.equal(state.tickets["other/repository#200"].summary.scope, "context_only");
 });
+
+test("an unresolved retained parent stays explicit without aborting other passive reconciliation", t => {
+  const repo = begin(t);
+  const parent = issue(200, { labels: ["ready-for-agent"], subIssues: { totalCount: 1 } });
+  repo.updateRemote(remote => { remote.issues = { 200: parent, 201: issue(201, { labels: ["ready-for-agent"], parent }) }; });
+  execute(repo, "discover");
+  execute(repo, "claim", "--issue", "201", "--agent", "worker", "--branch", "feat/ticket");
+  const before = execute(repo, "show").remote.tickets[201];
+  repo.updateRemote(remote => {
+    remote.issues[201].parent = null; remote.issues[201].labels = []; remote.issues[201].body = "Part of #200, #300";
+    remote.issues[202] = issue(202, { labels: ["ready-for-agent"] });
+  });
+  execute(repo, "reconcile");
+  const state = execute(repo, "show").remote;
+  assert.deepEqual(state.tickets[201], { ...before, parent: null, parentRepository: null, parentSource: "unresolved" });
+  assert.deepEqual(state.tickets[200].summary.children, []);
+  assert.equal(state.tickets[202].status, "ready");
+  assert.match(repo.remote().ticketComments[0].body, /Parent relationship: unresolved/);
+  assert.equal(resultJson(repo.run("readiness", "--issue", "201")).error, "parent_declaration_unresolved");
+});

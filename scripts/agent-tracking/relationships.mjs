@@ -11,5 +11,5 @@ export function parentDeclaration(body, issueNumber) {
 }
 
 export function parentMetadata(observed) {
-  return { parent: observed.number, parentRepository: observed.number === null ? null : observed.repository, parentSource: observed.number === null ? null : observed.source };
+  return { parent: observed.number, parentRepository: observed.number === null ? null : observed.repository, parentSource: observed.source ?? null };
 }

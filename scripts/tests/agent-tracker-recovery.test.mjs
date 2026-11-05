@@ -258,9 +258,12 @@ test("a pruned passive discovery retry observes current facts and preserves newe
   assert.equal(repo.worker(discovery).status, 0);
   const current = resultJson(repo.run("show")).remote;
   assert.equal(current.receipts[discovery.id].state, "published");
-  assert.deepEqual(current.tickets[201], owned);
+  assert.deepEqual(current.tickets[201], { ...owned, parent: 300 });
+  assert.deepEqual(current.tickets[200].summary.children, []);
+  assert.equal(current.tickets[300].role, "specification");
+  assert.deepEqual(current.tickets[300].summary.children, [201]);
   assert.equal(current.tickets[302].status, "ready");
-  assert.equal(Object.keys(repo.remote().items).length, 3);
+  assert.equal(Object.keys(repo.remote().items).length, 4);
 });
 
 test("a pruned selection retry cannot rewind a newer view selection", t => {

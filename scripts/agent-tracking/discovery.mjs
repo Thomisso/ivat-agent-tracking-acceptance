@@ -69,7 +69,7 @@ export function discoverTickets(state, { github, config, at }) {
     const declaration = issue.parent ? { number: null, unresolved: false } : parentDeclaration(issue.body ?? "", issue.number);
     const parent = issue.parent ?? (declaration.number ? readIssue(github, config.repository, declaration.number) : null);
     if (parent) add(parent, "specification");
-    const relationship = { parent: parent?.number ?? null, parentRepository: parent?.repository?.nameWithOwner ?? (parent ? config.repository : null), parentSource: issue.parent ? "native" : parent ? "fallback" : null };
+    const relationship = { parent: parent?.number ?? null, parentRepository: parent?.repository?.nameWithOwner ?? (parent ? config.repository : null), parentSource: issue.parent ? "native" : parent ? "fallback" : declaration.unresolved ? "unresolved" : null };
     if (tickets[issue.number]) {
       // Reconcile observed relationships, never execution state or attested
       // integration context. Lifecycle commands validate that context separately.
@@ -83,7 +83,14 @@ export function discoverTickets(state, { github, config, at }) {
   // Membership selection is deliberately narrow, but observed relationships
   // of already tracked local work must stay current after label/closure changes.
   for (const record of Object.values(state.tickets).filter(record => record.role === "implementation" && (record.repository ?? config.repository).toLowerCase() === config.repository.toLowerCase())) {
-    const observed = currentParent(github, config, record.number);
+    let observed;
+    try { observed = currentParent(github, config, record.number); }
+    catch (error) {
+      if (error.code !== "parent_declaration_unresolved") throw error;
+      // Ambiguous fallback remains unverified; do not retain a stale parent
+      // or abort unrelated passive records. Owned verification stays strict.
+      observed = { number: null, repository: null, source: "unresolved" };
+    }
     if (observed.number !== null) {
       const key = observed.repository.toLowerCase() === config.repository.toLowerCase() ? observed.number : `${observed.repository}#${observed.number}`;
       if (!tickets[key]) {
