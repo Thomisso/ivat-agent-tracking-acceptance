@@ -9,4 +9,3 @@ export function parentDeclaration(body, issueNumber) {
   const unique = new Set(declarations);
   return declarations.some(value => !value || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) || unique.size !== 1 || Number(declarations[0]) === issueNumber ? { number: null, unresolved: true } : { number: Number(declarations[0]), unresolved: false };
 }
-
