@@ -7,19 +7,38 @@ on:
 permissions:
   contents: read
 jobs:
-  tracker-tests:
-    name: tracker-tests
+  tracker-tests-shard:
+    name: tracker-tests-${{ matrix.file }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        file:
+          - agent-tracker.test.mjs
+          - agent-tracker-lifecycle.test.mjs
+          - agent-tracker-recovery.test.mjs
+          - agent-tracker-activity.test.mjs
+          - agent-tracker-final.test.mjs
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: node --test scripts/tests/agent-tracker*.test.mjs
+      - run: node --test scripts/tests/${{ matrix.file }}
+  tracker-tests:
+    name: tracker-tests
+    runs-on: ubuntu-latest
+    needs: tracker-tests-shard
+    if: ${{ always() }}
+    steps:
+      - name: Require every tracker test file to pass
+        env:
+          SHARDS_RESULT: ${{ needs.tracker-tests-shard.result }}
+        run: test "$SHARDS_RESULT" = success
   syntax:
     name: syntax
     runs-on: ubuntu-latest

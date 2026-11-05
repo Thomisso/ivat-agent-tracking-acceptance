@@ -49,12 +49,15 @@ function issueKey(issue, config) {
   const repository = (typeof issue.repository === "string" ? issue.repository : issue.repository?.full_name ?? issue.repository?.nameWithOwner) ?? issue.repository_url?.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)$/)?.[1] ?? issue.html_url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//)?.[1] ?? config.repository;
   return repository.toLowerCase() === config.repository.toLowerCase() ? issue.number : `${repository}#${issue.number}`;
 }
+function hasParent(child, parent, config) {
+  return child.parent === parent.number && (child.parentRepository ?? config.repository).toLowerCase() === (parent.repository ?? config.repository).toLowerCase();
+}
 function childrenFor(state, record, github, config) {
   if (record.role !== "specification") return [];
   let native;
   try { native = github.pages(`repos/${config.repository}/issues/${record.number}/sub_issues`); }
   catch (error) { if (error.code !== "github_not_found") throw error; native = []; }
-  return [...new Set([...native.map(child => issueKey(child, config)), ...Object.values(state.tickets).filter(child => child.parent === record.number && (child.parentRepository ?? config.repository) === config.repository).map(child => issueKey(child, config))])];
+  return [...new Set([...native.map(child => issueKey(child, config)), ...Object.values(state.tickets).filter(child => hasParent(child, record, config)).map(child => issueKey(child, config))])];
 }
 function applicable(evidence, revision, pass) {
   if (!evidence) return "outstanding";
@@ -69,6 +72,13 @@ function checkStatus(evidence, record, config) {
   return requiredChecks(record, config).every(name => evidence.results.some(check => check.name === name && check.status === "passed")) ? "passed" : "outstanding";
 }
 export function updateSummary(state, record, github, config) {
+  const repository = record.repository ?? config.repository;
+  if (repository.toLowerCase() !== config.repository.toLowerCase()) {
+    // Discovery retains foreign parent context, but this controller has no
+    // whole-specification evidence authority for another repository.
+    record.summary = { scope: "context_only", repository };
+    return;
+  }
   const f = record.final;
   const children = childrenFor(state, record, github, config);
   const counts = { ready: 0, implementing: 0, review: 0, integrated: 0, done: 0, blocked: 0, cancelled: 0, untracked: 0 };
@@ -96,6 +106,7 @@ function requireImplementation(state, record, github, config) {
 }
 export function requireFinalGate(state, record, github, config) {
   updateSummary(state, record, github, config);
+  if (record.summary.scope === "context_only") throw new TrackerError("specification_repository_unsupported");
   if (record.cancellation) throw new TrackerError("implementation_cancelled");
   if (record.reversal?.state === "merged") throw new TrackerError("delivery_reversed");
   if (record.reversal?.state === "unverified") throw new TrackerError("reversal_unverified");
@@ -142,7 +153,7 @@ export function applyFinal(state, event, { github, config }) {
         const status = p.checks.some(check => check.status === "failed") ? "failed" : required.every(name => p.checks.some(check => check.name === name && check.status === "passed")) ? "passed" : "outstanding";
         f.checks = { revision: p.revision, tree: f.tree, status, required, results: p.checks, at: event.at, result: p.result };
       } else {
-        const implementers = record.role === "specification" ? Object.values(state.tickets).filter(child => child.parent === record.number).flatMap(child => [child.agent, child.review?.implementer]) : [record.agent, record.review?.implementer];
+        const implementers = record.role === "specification" ? Object.values(state.tickets).filter(child => hasParent(child, record, config)).flatMap(child => [child.agent, child.review?.implementer]) : [record.agent, record.review?.implementer];
         if (implementers.includes(p.reviewer)) throw new TrackerError("reviewer_not_independent");
         f.review = { ...p, at: event.at, tree: f.tree, outcome: p.standards === "pass" && p.spec === "pass" && !p.findings.length ? "clean" : "findings" };
       }
@@ -161,11 +172,20 @@ export function applyFinal(state, event, { github, config }) {
 export function renderFinal(record) {
   if (!record.summary) return "";
   const s = record.summary;
+  if (s.scope === "context_only") return `\n- Foreign specification context only: child counts and final gates are not tracked for ${s.repository}. Inspect the [original specification](${record.url}).\n`;
   return `\n- Child phases: ${JSON.stringify(s.counts)}\n- Shared checks: ${s.checks}\n- Combined review: ${s.review}\n- Resulting revision: ${s.revision ?? "not bound"}\n- Final PR: ${s.pullRequest ? `[${s.pullRequest.state}](${s.pullRequest.url})` : "outstanding"}\n${record.cancellation ? `- Cancellation evidence: ${JSON.stringify(record.cancellation)}\n` : ""}${record.reversal ? `- Explicit reversal evidence: ${JSON.stringify(record.reversal)}\n` : ""}${record.final?.gate ? `- Final gate: ${JSON.stringify(record.final.gate)}\n` : ""}${record.delivery ? `- Delivery evidence: ${JSON.stringify(record.delivery)}\n` : ""}${record.final?.handoff ? `- Final handoff: ${JSON.stringify(record.final.handoff)}\n` : ""}${record.final?.checks ? `- Shared check evidence: ${JSON.stringify(record.final.checks)}\n` : ""}${record.final?.review ? `- Combined review evidence: ${JSON.stringify(record.final.review)}\n` : ""}`;
 }
 
 function sameHandoffPr(pr, handoff) {
   return pr.nodeId === handoff.nodeId && pr.number === handoff.pullRequest && pr.branch === handoff.branch && pr.target === handoff.target && pr.revision === handoff.revision;
+}
+function verifyHandoffTarget(github, config, handoff) {
+  handoff.targetRevision = remoteCommit(github, config, handoff.target).sha;
+  try { remoteAncestor(github, config, handoff.targetRevision, handoff.revision); }
+  catch (error) {
+    if (error.code === "revision_not_in_history") throw new TrackerError("final_target_changed");
+    throw error;
+  }
 }
 function restoreDraft(github, config, pr) {
   github.graph(`mutation TrackerRestoreDraft($input:ConvertPullRequestToDraftInput!){convertPullRequestToDraft(input:$input){pullRequest{id isDraft}}}`, { input: { pullRequestId: pr.nodeId } });
@@ -191,6 +211,7 @@ export function finishFinalHandoffs(state, github, config, persist) {
       if (!sameHandoffPr(pr, handoff)) throw new TrackerError("final_revision_changed");
       if (!["draft", "ready"].includes(pr.state)) throw new TrackerError("final_pr_open_required");
       requireFinalGate(state, record, github, config);
+      verifyHandoffTarget(github, config, handoff);
       if (pr.state === "draft") {
         // Persist the possible effect before calling GitHub. Failed/lost
         // compensation can then be retried without approving obsolete gates.
@@ -206,6 +227,7 @@ export function finishFinalHandoffs(state, github, config, persist) {
       const actual = readPr(github, config, handoff.pullRequest);
       if (!sameHandoffPr(actual, handoff)) throw new TrackerError("final_revision_changed");
       if (actual.state !== "ready") throw new TrackerError("final_ready_unverified");
+      verifyHandoffTarget(github, config, handoff);
       handoff.state = "ready";
       f.pullRequest = actual;
     } catch (error) {

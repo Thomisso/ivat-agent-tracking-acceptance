@@ -411,3 +411,71 @@ test("verified current delivery cannot be relabelled as undelivered cancellation
   assert.deepEqual(after.delivery, before.delivery);
   assert.equal(after.cancellation, undefined);
 });
+
+test("a foreign parent context cannot inherit a same-number local specification summary", t => {
+  const repo = prepare(t);
+  repo.updateRemote(remote => {
+    remote.issues[202] = { ...remote.issues[201], id: "I_202", number: 202, title: "Local work with foreign parent", url: "https://github.com/example/project/issues/202", parent: { id: "I_foreign_200", number: 200, title: "Foreign parent context", url: "https://github.com/other/repository/issues/200", repository: { nameWithOwner: "other/repository" } } };
+  });
+  execute(repo, "discover");
+  const state = execute(repo, "show").remote;
+  assert.equal(state.tickets[200].summary.counts.integrated, 1);
+  const foreign = state.tickets["other/repository#200"];
+  assert.equal(foreign.summary.scope, "context_only");
+  assert.equal(foreign.summary.repository, "other/repository");
+  assert.equal(foreign.summary.counts, undefined);
+  assert.equal(foreign.status, null);
+  assert.match(repo.remote().foreignComments[0].body, /Foreign specification context only/);
+  assert.doesNotMatch(repo.remote().foreignComments[0].body, /Child phases:/);
+  assert.equal(state.tickets[202].parentRepository, "other/repository");
+});
+
+test("an agent of an unrelated foreign parent may independently review a same-number local specification", t => {
+  const repo = prepare(t);
+  repo.git("branch", "feat/foreign-context");
+  repo.updateRemote(remote => {
+    remote.issues[202] = { ...remote.issues[201], id: "I_202", number: 202, title: "Work in another parent context", url: "https://github.com/example/project/issues/202", parent: { id: "I_foreign_200", number: 200, title: "Foreign specification", url: "https://github.com/other/repository/issues/200", html_url: "https://github.com/other/repository/issues/200", repository_url: "https://api.github.com/repos/other/repository", repository: { nameWithOwner: "other/repository" } } };
+  });
+  execute(repo, "discover");
+  execute(repo, "claim", "--issue", "202", "--agent", "foreign-worker", "--branch", "feat/foreign-context", "--result", "Separate parent work claimed");
+  bind(repo); finalChecks(repo);
+  const review = finalReview(repo, ["--reviewer", "foreign-worker"]);
+  assert.equal(review.status, 0, review.stderr);
+  const state = execute(repo, "show").remote;
+  assert.equal(state.tickets[200].summary.review, "passed");
+  assert.equal(state.tickets[200].summary.counts.integrated, 1);
+  assert.equal(state.tickets[202].parentRepository, "other/repository");
+  assert.equal(state.tickets["other/repository#200"].summary.scope, "context_only");
+});
+
+test("target content absent from the checked head refuses fresh and already-ready handoff and compensates a race", t => {
+  const outcomes = [];
+  for (const mode of ["before", "during", "already_ready"]) {
+    const repo = prepare(t, false);
+    evidenceComplete(repo);
+    repo.git("checkout", "-b", "advanced-target", "main");
+    writeFileSync(path.join(repo.directory, "target.txt"), "New target content absent from the checked head\n");
+    repo.git("add", "target.txt");
+    repo.git("-c", "user.name=Final test", "-c", "user.email=final@example.test", "commit", "-m", "Advance final target");
+    const target = repo.git("rev-parse", "HEAD");
+    let result;
+    if (mode === "before") {
+      repo.git("branch", "-f", "main", target);
+      result = repo.run("final-handoff", "--issue", "201", "--result", "Checked head omits new target content");
+    } else if (mode === "during") {
+      repo.updateRemote(remote => { remote.advanceTargetDuringReady = target; });
+      result = repo.run("final-handoff", "--issue", "201", "--result", "Target races with the authorized ready effect");
+    } else {
+      repo.updateRemote(remote => { remote.failure = { match: "TrackerReady", phase: "after", remaining: 1 }; });
+      assert.equal(resultJson(repo.run("final-handoff", "--issue", "201", "--result", "Ready response lost before target advance")).error, "publication_pending");
+      repo.git("branch", "-f", "main", target);
+      result = repo.run("sync");
+    }
+    outcomes.push({ mode, error: resultJson(result).error, draft: repo.remote().pulls[300].draft, handoff: execute(repo, "show").remote.tickets[201].final.handoff.state });
+  }
+  assert.deepEqual(outcomes, [
+    { mode: "before", error: "final_target_changed", draft: true, handoff: "refused" },
+    { mode: "during", error: "final_target_changed", draft: true, handoff: "refused" },
+    { mode: "already_ready", error: "final_target_changed", draft: true, handoff: "refused" },
+  ]);
+});
