@@ -82,7 +82,10 @@ function reconcileRecords(state, event, github, config, runId) {
     }
     if (event.payload.source === "remote-recovery") unverified.push("unpublished_history_not_recovered");
     record.recoveryEvidence = evidence;
-    if (record.activity !== "inactive") record.activity = "unverified";
+    if (record.activity !== "inactive") {
+      record.activity = "unverified";
+      if (record.activityEpisode) record.activityEpisode.startedAt = event.at;
+    }
   }
 }
 

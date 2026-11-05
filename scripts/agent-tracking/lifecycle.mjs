@@ -1,3 +1,4 @@
+import { beginActivityEpisode, applyActivity, observationTime } from "./activity.mjs";
 import { TrackerError } from "./github.mjs";
 import { localCommit, localAncestor, verifyReviewedTip, remoteAncestor, localIntegration, verifyIntegration, dependencyReadiness, currentParent } from "./evidence.mjs";
 
@@ -9,7 +10,7 @@ export function buildLifecyclePayload(command, options, state) {
   if (command === "block") return { issue: Number(options.issue), reason: options.reason, reference: options.reference ?? null, condition: options.condition, result: options.result };
   if (command === "resume-phase") return { issue: Number(options.issue), resolution: options.resolution, result: options.result };
   if (command === "integrate") return { issue: Number(options.issue), ...localIntegration(ticket, options["integration-commit"]), result: options.result };
-  if (command === "review-start") return { issue: Number(options.issue), reviewer: options.reviewer, result: options.result };
+  if (command === "review-start") return { issue: Number(options.issue), reviewer: options.reviewer, ...(options["observed-at"] ? { observedAt: options["observed-at"] } : {}), result: options.result };
   if (command === "review-result") {
     let findings;
     try { findings = JSON.parse(options.findings); } catch { throw new TrackerError("event_invalid"); }
@@ -46,9 +47,10 @@ export function validateLifecycle(event, text) {
     return;
   }
   if (event.type === "review-start" || event.type === "review-result") {
-    const allowed = event.type === "review-start" ? ["issue", "reviewer", "result"] : ["issue", "reviewer", "result", "revision", "standards", "spec", "findings", "independence"];
+    const allowed = event.type === "review-start" ? ["issue", "reviewer", "result", "observedAt"] : ["issue", "reviewer", "result", "revision", "standards", "spec", "findings", "independence"];
     if (Object.keys(p).some(key => !allowed.includes(key))) throw new TrackerError("event_invalid");
     text(p.reviewer, 100);
+    if (event.type === "review-start" && p.observedAt !== undefined) { observationTime(p.observedAt); if (Date.parse(p.observedAt) > Date.parse(event.at)) throw new TrackerError("observation_in_future"); }
     if (event.type === "review-result") {
       if (!/^[a-f0-9]{40}$/.test(p.revision ?? "")) throw new TrackerError("event_invalid");
       if (!["pass", "fail"].includes(p.standards) || !["pass", "fail"].includes(p.spec) || !Array.isArray(p.findings) || p.findings.length > 20) throw new TrackerError("event_invalid");
@@ -70,6 +72,7 @@ export function applyLifecycle(state, event, { github, config }) {
     if (!["implementing", "review", "integrated"].includes(ticket.status)) throw new TrackerError("phase_invalid");
     ticket.blockage = { kind: "obstacle", reason: p.reason, reference: p.reference, condition: p.condition, resumePhase: ticket.status, at: event.at };
     ticket.status = "blocked"; ticket.activity = "inactive";
+    if (ticket.activityEpisode) Object.assign(ticket.activityEpisode, { state: "waiting", inactiveAt: event.at });
     ticket.stateAt = event.at; ticket.result = p.result; ticket.revision = state.revision + 1;
     return;
   }
@@ -83,6 +86,7 @@ export function applyLifecycle(state, event, { github, config }) {
     if (phase === "integrated") verifyIntegration(github, config, ticket, ticket.integration);
     ticket.lastBlockage = { ...ticket.blockage, resolution: p.resolution, resolvedAt: event.at };
     ticket.blockage = null; ticket.status = phase; ticket.activity = phase === "implementing" ? "unverified" : "inactive";
+    beginActivityEpisode(ticket, event.at, phase === "review" ? "reviewer" : "implementer", phase === "implementing" ? "working" : "waiting");
     ticket.stateAt = event.at; ticket.result = p.result; ticket.revision = state.revision + 1;
     return;
   }
@@ -99,16 +103,20 @@ export function applyLifecycle(state, event, { github, config }) {
     if (ticket.reviewer && ticket.reviewer !== p.reviewer) throw new TrackerError("reviewer_mismatch");
     if (event.type === "review-result" && p.revision !== ticket.review.revision) throw new TrackerError("review_revision_changed");
     verifyReviewedTip(github, config, ticket, ticket.review.revision);
+    if (event.type === "review-start" && (Date.parse(p.observedAt ?? event.at) < Math.max(Date.parse(ticket.review.handoffAt), Date.parse(ticket.activityEpisode?.startedAt ?? ticket.review.handoffAt)) || Date.parse(p.observedAt ?? event.at) > Date.now())) throw new TrackerError("activity_episode_superseded");
     ticket.reviewer = p.reviewer;
     if (event.type === "review-start") {
+      if (!["waiting", "working"].includes(ticket.review.outcome)) throw new TrackerError("phase_invalid");
+      if (ticket.review.outcome !== "working") beginActivityEpisode(ticket, new Date(Math.max(Date.parse(ticket.review.handoffAt), Date.parse(ticket.activityEpisode?.startedAt ?? ticket.review.handoffAt))).toISOString(), "reviewer");
       ticket.review.outcome = "working";
-      ticket.activity = "confirmed"; ticket.activityAt = event.at;
-      ticket.activityObservation = { agent: p.reviewer, at: event.at, result: p.result };
+      applyActivity(state, { ...event, payload: { issue: p.issue, agent: p.reviewer, role: "reviewer", state: "working", source: "agent_message", observedAt: p.observedAt ?? event.at, reference: p.result } });
     } else {
       const clean = p.standards === "pass" && p.spec === "pass" && p.findings.length === 0;
       Object.assign(ticket.review, { reviewer: p.reviewer, standards: p.standards, spec: p.spec, findings: p.findings, independence: p.independence, result: p.result, at: event.at, outcome: clean ? "clean" : "findings" });
       ticket.status = clean ? "review" : "implementing";
       ticket.activity = clean ? "inactive" : "unverified";
+      if (clean && ticket.activityEpisode) Object.assign(ticket.activityEpisode, { state: "waiting", inactiveAt: event.at });
+      else if (!clean) beginActivityEpisode(ticket, event.at);
     }
     ticket.stateAt = event.at; ticket.result = p.result; ticket.revision = state.revision + 1;
     return;
@@ -120,6 +128,7 @@ export function applyLifecycle(state, event, { github, config }) {
   ticket.review = { implementer: ticket.agent, base: p.base, revision: p.revision, checks: p.checks, implementationComplete: true, checksStatus: "passed", handoffAt: event.at, outcome: "waiting" };
   ticket.workingRevision = p.revision;
   ticket.status = "review"; ticket.activity = "inactive"; ticket.reviewer = null;
+  beginActivityEpisode(ticket, event.at, "reviewer", "waiting");
   ticket.stateAt = event.at; ticket.result = p.result; ticket.revision = state.revision + 1;
 }
 

@@ -1,3 +1,4 @@
+import { evaluateActivity } from "./activity.mjs";
 import { prunePublishedDiscoveryReceipts } from "./discovery.mjs";
 import { reconcileViews } from "./views.mjs";
 import { TrackerError } from "./github.mjs";
@@ -33,7 +34,7 @@ export function publishTicket(github, config, record, state = { tickets: {} }) {
   const recovery = record.recoveryEvidence ? `- Recovery evidence (${record.recoveryEvidence.source}, ${record.recoveryEvidence.observedAt}): ${record.recoveryEvidence.unverified.join(", ") || "referenced facts available; worker activity remains separate"}\n` : "";
   const fallbackChildren = Object.values(state.tickets).filter(child => child.parentSource === "fallback" && child.parent === record.number && (child.parentRepository ?? config.repository).toLowerCase() === (record.repository ?? config.repository).toLowerCase());
   const fallbackOverview = fallbackChildren.length ? `\nThe native Parent issue filter excludes text-only fallback relationships. These tracked issues remain accessible below and in the table with its filter cleared:\n${fallbackChildren.map(child => `- Tracker fallback (opening Part of declaration): [${child.repository ?? config.repository}#${child.number}](${child.url})`).join("\n")}\n` : "";
-  const body = record.role === "specification" ? `${marker}\n\nAgent tracking: [Project](${config.project.url})\n\nSpecification context. Inspect the Agent specification table with native Parent issue filter \`parent-issue:"${record.repository ?? config.repository}#${record.number}"\`.\n${fallbackOverview}` : `${marker}\n\nAgent tracking: [Project](${config.project.url})\n\n- Run: ${record.runId}; generation ${record.generation}; revision ${record.revision}\n- Agent: ${record.agent}\n- Branch: ${record.branch} (${record.workingRevision})\n- Phase: ${record.status}\n- Activity: ${record.activity}\n- State observed (UTC): ${record.stateAt}\n- Activity observed (UTC): ${record.activityAt ?? "not verified"}\n- Latest result: ${record.result}\n${recovery}${record.review ? `- Review evidence: ${JSON.stringify(record.review)}\n` : ""}${record.integration ? `- Integration evidence: ${JSON.stringify(record.integration)}\n` : ""}${record.blockage ? `- Blockage: ${JSON.stringify(record.blockage)}\n` : ""}${record.dependencies ? `- Dependencies: ${JSON.stringify(record.dependencies)}\n` : ""}`;
+  const body = record.role === "specification" ? `${marker}\n\nAgent tracking: [Project](${config.project.url})\n\nSpecification context. Inspect the Agent specification table with native Parent issue filter \`parent-issue:"${record.repository ?? config.repository}#${record.number}"\`.\n${fallbackOverview}` : `${marker}\n\nAgent tracking: [Project](${config.project.url})\n\n- Run: ${record.runId}; generation ${record.generation}; revision ${record.revision}\n- Agent: ${record.agent}\n- Branch: ${record.branch} (${record.workingRevision})\n- Phase: ${record.status}\n- Activity: ${record.activity}\n- State observed (UTC): ${record.stateAt}\n- Activity observed (UTC): ${record.activityAt ?? "not verified"}\n- Activity provenance: ${record.activityObservation ? JSON.stringify(record.activityObservation) : "not verified"}\n- Latest result: ${record.result}\n${recovery}${record.review ? `- Review evidence: ${JSON.stringify(record.review)}\n` : ""}${record.integration ? `- Integration evidence: ${JSON.stringify(record.integration)}\n` : ""}${record.blockage ? `- Blockage: ${JSON.stringify(record.blockage)}\n` : ""}${record.dependencies ? `- Dependencies: ${JSON.stringify(record.dependencies)}\n` : ""}`;
   if (comments.length) github.request(`repos/${record.repository ?? config.repository}/issues/comments/${comments[0].id}`, { method: "PATCH", body: { body } });
   else github.request(`repos/${record.repository ?? config.repository}/issues/${record.number}/comments`, { method: "POST", body: { body } });
 
@@ -42,6 +43,7 @@ export function publishTicket(github, config, record, state = { tickets: {} }) {
 export function processWorker(github, config, event, environment = process.env) {
   if (environment.GITHUB_ACTIONS !== "true" || environment.GITHUB_JOB !== "publish" || !environment.GITHUB_WORKFLOW_REF?.startsWith(`${config.repository}/.github/workflows/${config.workflow}@`)) throw new TrackerError("serialized_worker_required");
   if (!/^[\w-]+$/.test(environment.GITHUB_ACTOR ?? "")) throw new TrackerError("worker_actor_invalid");
+  if (!environment.GH_TOKEN?.trim()) throw new TrackerError("actions_credential_missing");
   validateEvent(event);
   validateConfig(github, config);
   const { commentId, state } = readRegistry(github, config);
@@ -69,8 +71,19 @@ export function processWorker(github, config, event, environment = process.env) 
     writeRegistry(github, config, commentId, state);
   } else if (previous.state === "rejected") return { ok: false, error: previous.error };
   if (!projectionSynchronized(state)) {
+    // A pending confirmation can expire while its transport is interrupted.
+    if (evaluateActivity(state)) {
+      state.revision++;
+      writeRegistry(github, config, commentId, state);
+    }
     for (const record of Object.values(state.tickets)) publishTicket(github, config, record, state);
     if (state.membershipDiscovered) reconcileViews(github, config, state);
+    // Start the cadence only after every required external projection succeeds.
+    // The registry ACK commits this clock; retries keep the observation identity.
+    for (const record of Object.values(state.tickets).filter(record => record.activityPublicationPending)) {
+      record.activityPublishedAt = new Date().toISOString();
+      delete record.activityPublicationPending;
+    }
     state.publishedRevision = state.revision;
     for (const receipt of Object.values(state.receipts)) if (receipt.state === "pending" && receipt.revision <= state.publishedRevision) receipt.state = "published";
     compactReceipts(state);

@@ -175,11 +175,12 @@ test("resume repairs missing membership and reports unavailable Git evidence wit
   assert.equal(repo.run("start", "--run", "evidence-owner").status, 0);
   assert.equal(repo.run("claim", "--issue", "201", "--agent", "worker", "--branch", "feat/ticket").status, 0);
   const originalTime = resultJson(repo.run("show")).remote.tickets[201].stateAt;
-  const review = { base: "e".repeat(40), revision: "f".repeat(40), standardsPassed: true, specPassed: true };
+  const review = { base: "e".repeat(40), revision: "f".repeat(40), standardsPassed: true, specPassed: true, outcome: "working" };
   repo.updateRemote(remote => {
     const state = JSON.parse(remote.registry.match(/```json\n([\s\S]+)\n```/)[1]);
     state.tickets[201].status = "review";
     state.tickets[201].review = review;
+    state.tickets[201].reviewer = "independent-reviewer";
     remote.registry = `<!-- ivat-agent-tracker:registry:v1 -->\n\n\`\`\`json\n${JSON.stringify(state)}\n\`\`\`\n`;
     remote.items = {};
     remote.missingCommits = [review.base, review.revision];

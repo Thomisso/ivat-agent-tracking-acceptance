@@ -6,6 +6,7 @@ on:
   # Backlog membership has its own reconciliation, independent of freshness.
   schedule:
     - cron: '17 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       event:
@@ -38,5 +39,6 @@ jobs:
       - name: Apply intent and publish the latest confirmed state
         env:
           GH_TOKEN: ${{ secrets.AGENT_TRACKER_TOKEN }}
+          TRACKER_SCHEDULE: ${{ github.event.schedule }}
           TRACKER_EVENT: ${{ inputs.event }}
         run: node scripts/agent-tracker.mjs worker

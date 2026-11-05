@@ -22,6 +22,7 @@ export function parseRegistry(body) {
   try { state = JSON.parse(match[1]); } catch { throw new TrackerError("registry_invalid"); }
   const record = value => value !== null && typeof value === "object" && !Array.isArray(value);
   const counter = value => Number.isSafeInteger(value) && value >= 0;
+  const timestamp = value => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
   const identity = value => typeof value === "string" && /^[\w-]{1,100}$/.test(value);
   if (!record(state) || state.schemaVersion !== 1 || !counter(state.revision) || !counter(state.generation) || !counter(state.publishedRevision) || state.publishedRevision > state.revision || !record(state.tickets) || !record(state.receipts) || !Object.hasOwn(state, "owner")) throw new TrackerError("registry_invalid");
   if (Object.hasOwn(state, "selectionRevision") && (!counter(state.selectionRevision) || state.selectionRevision > state.revision)) throw new TrackerError("registry_invalid");
@@ -51,6 +52,12 @@ export function parseRegistry(body) {
   }
   for (const ticket of Object.values(state.tickets)) {
     if (!record(ticket)) throw new TrackerError("registry_invalid");
+    for (const key of ["activityAt", "activityPublishedAt"]) if (ticket[key] != null && !timestamp(ticket[key])) throw new TrackerError("registry_invalid");
+    if (ticket.activityPublicationPending !== undefined && ticket.activityPublicationPending !== true) throw new TrackerError("registry_invalid");
+    if (ticket.activityEpisode !== undefined) {
+      const episode = ticket.activityEpisode;
+      if (!record(episode) || !["implementer", "reviewer"].includes(episode.role) || !["working", "waiting", "stopped"].includes(episode.state) || !timestamp(episode.startedAt) || (episode.inactiveAt !== undefined && !timestamp(episode.inactiveAt))) throw new TrackerError("registry_invalid");
+    }
     if (ticket.runId != null && !(owner && ticket.runId === owner.runId && ticket.generation === owner.generation)) {
       const previous = history[ticket.generation];
       if (!previous || previous.runId !== ticket.runId || ticket.activity !== "inactive") throw new TrackerError("registry_invalid");

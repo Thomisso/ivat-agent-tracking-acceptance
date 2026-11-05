@@ -1,3 +1,4 @@
+import { validateActivity, applyActivity, evaluateActivity, beginActivityEpisode } from "./activity.mjs";
 import { discoverTickets } from "./discovery.mjs";
 import { currentParent, dependencyReadiness } from "./evidence.mjs";
 import { lifecycleCommands, validateLifecycle, applyLifecycle } from "./lifecycle.mjs";
@@ -10,8 +11,8 @@ export function text(value, limit = 1000) {
 }
 
 export function validateEvent(event) {
-  if (event?.type === "repair") {
-    if (Object.keys(event).some(key => !["id", "type", "at", "payload"].includes(key)) || !event.payload || typeof event.payload !== "object" || Object.keys(event.payload).length || !Number.isFinite(Date.parse(event.at)) || new Date(event.at).toISOString() !== event.at) throw new TrackerError("event_invalid");
+  if (["repair", "observe-activity"].includes(event?.type)) {
+    if (Object.keys(event).some(key => !["id", "type", "at", "payload"].includes(key)) || !event.payload || typeof event.payload !== "object" || Array.isArray(event.payload) || Object.keys(event.payload).length || !Number.isFinite(Date.parse(event.at)) || new Date(event.at).toISOString() !== event.at) throw new TrackerError("event_invalid");
     text(event.id, 100);
     if (!/^[\w-]+$/.test(event.id)) throw new TrackerError("event_invalid");
     return event;
@@ -36,13 +37,19 @@ export function validateEvent(event) {
       text(context.branch, 200);
     }
     text(event.payload.agent, 100); text(event.payload.branch, 200); text(event.payload.result);
-  } else if (lifecycleCommands.includes(event.type)) validateLifecycle(event, text);
+  } else if (event.type === "activity") validateActivity(event, text);
+  else if (lifecycleCommands.includes(event.type)) validateLifecycle(event, text);
   else throw new TrackerError("event_type_unknown");
   return event;
 }
 
 export function applyEvent(state, event, { github, config, actor }) {
   validateEvent(event);
+  if (event.type === "observe-activity") {
+    if (evaluateActivity(state)) state.revision++;
+    state.receipts[event.id] = { state: state.publishedRevision === state.revision ? "published" : "pending", type: event.type, revision: state.revision };
+    return state;
+  }
   if (event.type === "repair") {
     state.receipts[event.id] = { state: "pending", type: event.type, revision: state.revision };
     return state;
@@ -67,6 +74,13 @@ export function applyEvent(state, event, { github, config, actor }) {
       state.owner.sequence = event.sequence;
       state.owner.lastEventId = event.id;
       applyRecoveryEvent(state, event, { github, config, actor });
+    } else if (event.type === "activity") {
+      const outcome = applyActivity(state, event);
+      state.owner.sequence = event.sequence; state.owner.lastEventId = event.id;
+      if (outcome !== "adopted") {
+        state.receipts[event.id] = { state: state.publishedRevision === state.revision ? "published" : "pending", type: event.type, runId: event.runId, generation: event.generation, sequence: event.sequence, revision: state.revision, outcome };
+        return state;
+      }
     } else if (lifecycleCommands.includes(event.type)) {
       applyLifecycle(state, event, { github, config });
       state.owner.sequence = event.sequence;
@@ -96,6 +110,7 @@ export function applyEvent(state, event, { github, config, actor }) {
         integrationContext, pullRequest: historical ? existing.pullRequest ?? null : null, status: historical ? existing.status : "implementing", activity: historical && existing.status !== "implementing" ? "inactive" : "unverified", stateAt: historical ? existing.stateAt : event.at, activityAt: null,
         result: event.payload.result, runId: event.runId, generation: event.generation, revision: state.revision + 1,
       };
+      beginActivityEpisode(state.tickets[issue.number], event.at, "implementer", historical && existing.status !== "implementing" ? "waiting" : "working");
       state.owner.sequence = event.sequence;
       state.owner.lastEventId = event.id;
     }

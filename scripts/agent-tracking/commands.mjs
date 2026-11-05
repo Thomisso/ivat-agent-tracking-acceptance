@@ -1,3 +1,4 @@
+import { buildActivityPayload } from "./activity.mjs";
 import { randomUUID } from "node:crypto";
 import { localBranchRevision } from "./evidence.mjs";
 import { TrackerError } from "./github.mjs";
@@ -56,17 +57,17 @@ export function runCommand(command, github, config, options) {
       if (!remote.owner || options["from-run"] !== remote.owner.runId || Number(options["from-generation"]) !== remote.owner.generation) throw new TrackerError("run_superseded");
       if (github.request("user").login !== remote.owner.account) throw new TrackerError("run_actor_mismatch");
       event = { id: randomUUID(), type: "takeover", runId: options.run ?? randomUUID(), generation: remote.generation, sequence: 0, at, payload: { fromRunId: remote.owner.runId, fromGeneration: remote.owner.generation, reason: options.reason, source: "takeover", localFacts: collectLocalFacts(remote, remote.owner.runId) } };
-    } else if (command === "repair") {
-      event = { id: randomUUID(), type: "repair", at, payload: {} };
+    } else if (["repair", "observe-activity"].includes(command)) {
+      event = { id: randomUUID(), type: command, at, payload: {} };
     } else if (command === "claim") {
       if (!journal.run) throw new TrackerError("owned_run_required");
       if (journal.stopRequested) throw new TrackerError("run_stop_pending");
       const branchRevision = localBranchRevision(options.branch);
       event = { id: randomUUID(), type: "claim", ...journal.run, sequence: journal.nextSequence, at, payload: { issue: Number(options.issue), agent: options.agent, branch: options.branch, branchRevision, ...(options.spec || options["integration-branch"] ? { integrationContext: { specification: Number(options.spec), branch: options["integration-branch"] } } : {}), result: options.result ?? "Implementation started" } };
-    } else if (lifecycleCommands.includes(command)) {
+    } else if (command === "activity" || lifecycleCommands.includes(command)) {
       if (!journal.run) throw new TrackerError("owned_run_required");
       if (journal.stopRequested) throw new TrackerError("run_stop_pending");
-      event = { id: randomUUID(), type: command, ...journal.run, sequence: journal.nextSequence, at, payload: buildLifecyclePayload(command, options, journal.lastConfirmed) };
+      event = { id: randomUUID(), type: command, ...journal.run, sequence: journal.nextSequence, at, payload: command === "activity" ? buildActivityPayload(options) : buildLifecyclePayload(command, options, journal.lastConfirmed) };
     } else throw new TrackerError("command_unknown");
     validateEvent(event);
     if (["restart", "takeover"].includes(event.type)) {
@@ -75,8 +76,10 @@ export function runCommand(command, github, config, options) {
     }
     journal.pending.push(event);
     if (event.type === "stop") journal.stopRequested = event.id;
-    if (!["start", "restart", "takeover", "repair", "discover"].includes(event.type)) journal.nextSequence++;
+    if (!["start", "restart", "takeover", "repair", "discover", "observe-activity"].includes(event.type)) journal.nextSequence++;
     save();
-    return sync(github, config, journal, save, options);
+    const result = sync(github, config, journal, save, options);
+    const outcome = journal.lastConfirmed?.receipts[event.id]?.outcome;
+    return outcome ? { ...result, outcome } : result;
   });
 }

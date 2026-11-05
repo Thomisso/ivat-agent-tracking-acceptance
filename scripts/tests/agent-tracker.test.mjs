@@ -23,8 +23,8 @@ function repository(t) {
     directory,
     remote: () => JSON.parse(readFileSync(remote, "utf8")),
     updateRemote: update => { const state = JSON.parse(readFileSync(remote, "utf8")); update(state); writeFileSync(remote, JSON.stringify(state)); },
-    run: (...args) => spawnSync(process.execPath, [command, ...args], { cwd: directory, encoding: "utf8", env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, TRACKER_FAKE_GITHUB: remote, TRACKER_COMMAND: command } }),
-    worker: (event, environment = {}) => spawnSync(process.execPath, [command, "worker"], { cwd: directory, encoding: "utf8", env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, TRACKER_FAKE_GITHUB: remote, TRACKER_COMMAND: command, GITHUB_ACTIONS: "true", GITHUB_JOB: "publish", GITHUB_WORKFLOW_REF: "example/project/.github/workflows/agent-tracking.yml@refs/heads/main", GITHUB_ACTOR: "maintainer", TRACKER_EVENT: JSON.stringify(event), ...environment } }),
+    run: (...args) => spawnSync(process.execPath, [command, ...args], { cwd: directory, encoding: "utf8", env: { ...process.env, GH_TOKEN: "synthetic-actions-credential", PATH: `${bin}${path.delimiter}${process.env.PATH}`, TRACKER_FAKE_GITHUB: remote, TRACKER_COMMAND: command } }),
+    worker: (event, environment = {}) => spawnSync(process.execPath, [command, "worker"], { cwd: directory, encoding: "utf8", env: { ...process.env, GH_TOKEN: "synthetic-actions-credential", PATH: `${bin}${path.delimiter}${process.env.PATH}`, TRACKER_FAKE_GITHUB: remote, TRACKER_COMMAND: command, GITHUB_ACTIONS: "true", GITHUB_JOB: "publish", GITHUB_WORKFLOW_REF: "example/project/.github/workflows/agent-tracking.yml@refs/heads/main", GITHUB_ACTOR: "maintainer", TRACKER_EVENT: JSON.stringify(event), ...environment } }),
   };
 }
 
@@ -128,7 +128,7 @@ test("linked worktrees observe the same owning run and cannot start an independe
   const linked = path.join(repo.directory, "linked");
   execFileSync("git", ["worktree", "add", linked, "-b", "linked"], { cwd: repo.directory, stdio: "pipe" });
   const config = path.join(repo.directory, ".github/agent-tracking.json");
-  const env = { ...process.env, PATH: `${path.join(repo.directory, "bin")}${path.delimiter}${process.env.PATH}`, TRACKER_FAKE_GITHUB: path.join(repo.directory, "github.json"), TRACKER_COMMAND: command };
+  const env = { ...process.env, GH_TOKEN: "synthetic-actions-credential", PATH: `${path.join(repo.directory, "bin")}${path.delimiter}${process.env.PATH}`, TRACKER_FAKE_GITHUB: path.join(repo.directory, "github.json"), TRACKER_COMMAND: command };
   const shown = spawnSync(process.execPath, [command, "show", "--config", config], { cwd: linked, env, encoding: "utf8" });
   assert.equal(JSON.parse(shown.stdout).local.run.runId, "shared-owner");
   const second = spawnSync(process.execPath, [command, "start", "--run", "second-owner", "--config", config], { cwd: linked, env, encoding: "utf8" });
