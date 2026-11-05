@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { localBranchRevision } from "./evidence.mjs";
 import { TrackerError } from "./github.mjs";
 import { readRegistry } from "./state.mjs";
 import { validateEvent } from "./events.mjs";
 import { withJournal } from "./journal.mjs";
+import { lifecycleCommands, buildLifecyclePayload } from "./lifecycle.mjs";
 import { validateConfig } from "./config.mjs";
 
 function sync(github, config, journal, save, options) {
@@ -54,10 +55,11 @@ export function runCommand(command, github, config, options) {
       journal.nextSequence = 1;
     } else if (command === "claim") {
       if (!journal.run) throw new TrackerError("owned_run_required");
-      let branchRevision;
-      try { branchRevision = execFileSync("git", ["rev-parse", "--verify", `refs/heads/${options.branch}^{commit}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
-      catch { throw new TrackerError("branch_missing"); }
-      event = { id: randomUUID(), type: "claim", ...journal.run, sequence: journal.nextSequence, at, payload: { issue: Number(options.issue), agent: options.agent, branch: options.branch, branchRevision, result: options.result ?? "Implementation started" } };
+      const branchRevision = localBranchRevision(options.branch);
+      event = { id: randomUUID(), type: "claim", ...journal.run, sequence: journal.nextSequence, at, payload: { issue: Number(options.issue), agent: options.agent, branch: options.branch, branchRevision, ...(options.spec || options["integration-branch"] ? { integrationContext: { specification: Number(options.spec), branch: options["integration-branch"] } } : {}), result: options.result ?? "Implementation started" } };
+    } else if (lifecycleCommands.includes(command)) {
+      if (!journal.run) throw new TrackerError("owned_run_required");
+      event = { id: randomUUID(), type: command, ...journal.run, sequence: journal.nextSequence, at, payload: buildLifecyclePayload(command, options, journal.lastConfirmed) };
     } else throw new TrackerError("command_unknown");
     validateEvent(event);
     journal.pending.push(event);

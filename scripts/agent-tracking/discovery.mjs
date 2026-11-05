@@ -1,3 +1,4 @@
+import { parentDeclaration } from "./relationships.mjs";
 import { TrackerError } from "./github.mjs";
 
 const issueFields = `id number title url body state repository{nameWithOwner} parent{id number title url repository{nameWithOwner}} subIssues(first:1){totalCount}`;
@@ -7,17 +8,6 @@ function readIssue(github, repository, number) {
   const issue = github.graph(`query TrackerDiscoveryIssue($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){${issueFields}}}}`, { owner, name, number }).repository.issue;
   if (!issue) throw new TrackerError("discovery_parent_missing");
   return issue;
-}
-
-function parentDeclaration(body) {
-  const opening = body.split(/^##\s+/m)[0];
-  const section = body.match(/^##\s+Parent\s*\n([\s\S]*?)(?=^##\s|$(?![\s\S]))/im)?.[1] ?? "";
-  const text = `${opening}\n${section}`;
-  const lines = text.split("\n").filter(line => /^\s*Part of\b/i.test(line));
-  if (!lines.length) return { number: null, unresolved: false };
-  const declarations = lines.map(line => line.match(/^\s*Part of #(\d+)\b(?:\s*(?:[—–-].*)?)?\s*$/i)?.[1]);
-  const unique = new Set(declarations);
-  return declarations.some(value => !value || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) || unique.size !== 1 ? { number: null, unresolved: true } : { number: Number(declarations[0]), unresolved: false };
 }
 
 function readiness(github, config, issue) {
@@ -60,8 +50,7 @@ export function discoverTickets(state, { github, config, at }) {
   for (const issue of issues) {
     const specification = issue.subIssues?.totalCount > 0 || [/^##\s+Problem Statement\s*$/im, /^##\s+Solution\s*$/im, /^##\s+User Stories\s*$/im].every(pattern => pattern.test(issue.body ?? ""));
     if (specification) { add(issue, "specification"); continue; }
-    const declaration = issue.parent ? { number: null, unresolved: false } : parentDeclaration(issue.body ?? "");
-    if (declaration.number === issue.number) { declaration.number = null; declaration.unresolved = true; }
+    const declaration = issue.parent ? { number: null, unresolved: false } : parentDeclaration(issue.body ?? "", issue.number);
     const parent = issue.parent ?? (declaration.number ? readIssue(github, config.repository, declaration.number) : null);
     if (parent) add(parent, "specification");
     const relationship = { parent: parent?.number ?? null, parentRepository: parent?.repository?.nameWithOwner ?? (parent ? config.repository : null), parentSource: issue.parent ? "native" : parent ? "fallback" : null };
@@ -71,8 +60,9 @@ export function discoverTickets(state, { github, config, at }) {
       tickets[issue.number] = { ...tickets[issue.number], ...relationship };
       continue;
     }
-    const gate = declaration.unresolved ? { status: "blocked", result: "Parent declaration is unresolved; use native parent or one opening Part of #N declaration" } : readiness(github, config, issue);
-    add(issue, "implementation", relationship.parent, { ...gate, ...relationship });
+    const gate = declaration.unresolved ? { status: "blocked", result: "Parent declaration is unresolved; use native parent or consistent Part of #N declarations at the opening or in Parent sections" } : readiness(github, config, issue);
+    const blockage = gate.status === "blocked" && !declaration.unresolved ? { kind: "dependency", reason: gate.result, reference: null, condition: "Every blocker passes same-spec integration or external final merge", resumePhase: "ready", at } : null;
+    add(issue, "implementation", relationship.parent, { ...gate, ...(blockage ? { blockage } : {}), ...relationship });
   }
   state.tickets = tickets;
 }
