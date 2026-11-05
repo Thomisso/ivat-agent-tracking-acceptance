@@ -1,6 +1,6 @@
 import { TrackerError } from "./github.mjs";
 
-const viewFields = `id name layout filter configuration{visibleFields(first:100){nodes{... on ProjectV2Field{id} ... on ProjectV2SingleSelectField{id}}}} groupByFields(first:10){nodes{... on ProjectV2Field{id} ... on ProjectV2SingleSelectField{id}}}`;
+const viewFields = `id name layout filter configuration{visibleFields(first:100){nodes{... on ProjectV2Field{id} ... on ProjectV2SingleSelectField{id}}}} verticalGroupByFields(first:10){nodes{... on ProjectV2Field{id} ... on ProjectV2SingleSelectField{id}}}`;
 
 function readViews(github, config) {
   const connection = github.graph(`query TrackerViews($id:ID!){node(id:$id){... on ProjectV2{views(first:100){nodes{${viewFields}} pageInfo{hasNextPage}}}}}`, { id: config.project.id }).node.views;
@@ -29,7 +29,7 @@ export function reconcileViews(github, config, state) {
   const board = actual.find(view => view.id === state.views.board.id);
   const table = actual.find(view => view.id === state.views.table.id);
   if (!board || board.layout !== "BOARD_LAYOUT" || board.filter !== "has:status" || !table || table.layout !== "TABLE_LAYOUT" || table.filter !== state.views.table.filter || !table.configuration?.visibleFields.nodes.some(field => field.id === parent.id)) throw new TrackerError("project_view_configuration_mismatch");
-  // The public mutation has no group-by input. Report actual readback, then let
-  // setup guidance direct the maintainer to the UI when grouping is absent.
-  state.views.board.groupingVerified = board.groupByFields.nodes.some(field => field.id === config.fields.status.id);
+  // Board columns are the vertical axis; horizontal grouping is independent.
+  // Verify actual readback even when the new board defaults to Status columns.
+  state.views.board.groupingVerified = board.verticalGroupByFields.nodes.some(field => field.id === config.fields.status.id);
 }
