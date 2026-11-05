@@ -21,6 +21,7 @@ jobs:
       matrix:
         file:
           - agent-tracker-activity.test.mjs
+          - agent-tracker-capacity.test.mjs
           - agent-tracker-entry.test.mjs
           - agent-tracker-final.test.mjs
           - agent-tracker-lifecycle.test.mjs

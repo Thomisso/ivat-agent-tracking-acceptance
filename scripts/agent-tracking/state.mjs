@@ -11,7 +11,7 @@ export function initialState() {
 
 export function renderRegistry(state) {
   const body = `${registryMarker}\n\n\`\`\`json\n${JSON.stringify(state)}\n\`\`\`\n`;
-  if (Buffer.byteLength(body) > 48 * 1024) throw new TrackerError("registry_capacity_exceeded");
+  if (Buffer.byteLength(body) > 60 * 1024) throw new TrackerError("registry_capacity_exceeded");
   return body;
 }
 
