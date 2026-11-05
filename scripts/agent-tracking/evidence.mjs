@@ -83,7 +83,7 @@ function blockerRepository(blocker, fallback) {
   const match = blocker.repository_url?.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)$/) ?? blocker.html_url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//);
   return match?.[1] ?? fallback;
 }
-function finalMerge(github, repository, number) {
+export function finalMerge(github, repository, number) {
   const [owner, name] = repository.split("/");
   const prs = [];
   let cursor = null;

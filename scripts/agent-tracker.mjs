@@ -25,14 +25,14 @@ try {
       const checked = validateConfig(github, config);
       result = { ok: true, project: checked.project.url };
     } else if (command === "worker") {
-      if (!process.env.GH_TOKEN?.trim()) throw new TrackerError("actions_credential_missing");
       let event = process.env.TRACKER_EVENT ? JSON.parse(process.env.TRACKER_EVENT) : null;
-      if (!event && ["issues", "schedule"].includes(process.env.GITHUB_EVENT_NAME) && /^\d+$/.test(process.env.GITHUB_RUN_ID ?? "")) {
+      if (!process.env.GH_TOKEN?.trim()) throw new TrackerError("actions_credential_missing");
+      if (!event && ["issues", "schedule", "pull_request_target", "push"].includes(process.env.GITHUB_EVENT_NAME) && /^\d+$/.test(process.env.GITHUB_RUN_ID ?? "")) {
         if (process.env.GITHUB_EVENT_NAME === "schedule" && process.env.TRACKER_SCHEDULE === "*/5 * * * *") {
           event = { id: `activity-${process.env.GITHUB_RUN_ID}`, type: "observe-activity", at: new Date().toISOString(), payload: {} };
         } else {
           const run = github.request(`repos/${config.repository}/actions/runs/${process.env.GITHUB_RUN_ID}`);
-          event = { id: `discovery-${process.env.GITHUB_RUN_ID}`, type: "discover", at: new Date(run.created_at).toISOString(), payload: {} };
+          event = { id: `discovery-${process.env.GITHUB_RUN_ID}`, type: "reconcile", at: new Date(run.created_at).toISOString(), payload: {} };
         }
       }
       result = processWorker(github, config, event);

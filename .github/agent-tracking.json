@@ -5,7 +5,7 @@
   "ownerType": "User",
   "project": {
     "id": "PVT_kwHOAeJo_s4BqJzA",
-    "title": "iVAT — Agent tracking acceptance",
+    "title": "iVAT \u2014 Agent tracking acceptance",
     "url": "https://github.com/users/Thomisso/projects/2",
     "number": 2
   },
@@ -71,5 +71,17 @@
       "id": "PVTF_lAHOAeJo_s4BqJzAzhoiM0Q",
       "name": "Revision"
     }
+  },
+  "finalChecks": {
+    "specification": [
+      "tracker-tests",
+      "syntax",
+      "diff"
+    ],
+    "standalone": [
+      "tracker-tests",
+      "syntax",
+      "diff"
+    ]
   }
 }

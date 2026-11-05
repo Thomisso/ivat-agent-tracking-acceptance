@@ -3,6 +3,11 @@ name: Agent tracking
 on:
   issues:
     types: [opened, edited, labeled, unlabeled, reopened, closed, transferred]
+  # Execute trusted default-branch publisher code, never PR head code.
+  pull_request_target:
+    types: [closed, reopened, synchronize, edited]
+  push:
+    branches: [main]
   # Backlog membership has its own reconciliation, independent of freshness.
   schedule:
     - cron: '17 * * * *'

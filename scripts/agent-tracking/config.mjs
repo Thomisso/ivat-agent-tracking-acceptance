@@ -3,6 +3,17 @@ import path from "node:path";
 import { TrackerError } from "./github.mjs";
 import { activities, statuses, textFields, registryMarker, initialState, renderRegistry, readRegistry } from "./state.mjs";
 
+export const defaultFinalChecks = { specification: ["test:serial", "typecheck", "lint", "build", "runtime"], standalone: ["focused", "typecheck", "lint", "runtime"] };
+
+function checkFinalPolicy(config) {
+  config.finalChecks ??= structuredClone(defaultFinalChecks);
+  if (!config.finalChecks || typeof config.finalChecks !== "object" || Object.keys(config.finalChecks).some(key => !["specification", "standalone"].includes(key))) throw new TrackerError("configuration_invalid");
+  for (const role of ["specification", "standalone"]) {
+    const names = config.finalChecks[role];
+    if (!Array.isArray(names) || !names.length || names.length > 10 || new Set(names).size !== names.length || names.some(name => typeof name !== "string" || !/^[a-zA-Z0-9:_-]{1,100}$/.test(name))) throw new TrackerError("configuration_invalid");
+  }
+}
+
 export function configPath(options = {}) { return path.resolve(options.config ?? ".github/agent-tracking.json"); }
 
 export function loadConfig(options = {}) {
@@ -16,10 +27,12 @@ export function loadConfig(options = {}) {
     const field = config.fields[key];
     if (!field?.id || !field.name || (options && Object.keys(options).some(option => !field.options?.[option]))) throw new TrackerError("configuration_invalid");
   }
+  checkFinalPolicy(config);
   return config;
 }
 
 export function validateConfig(github, config) {
+  checkFinalPolicy(config);
   const repository = github.request(`repos/${config.repository}`);
   if (repository.full_name.toLowerCase() !== config.repository.toLowerCase() || repository.owner.login.toLowerCase() !== config.owner.toLowerCase() || repository.owner.type !== config.ownerType) throw new TrackerError("repository_mismatch");
   const project = github.project(config.owner, config.project.number, config.ownerType);
@@ -76,7 +89,13 @@ export function setup(github, options) {
   }
   const registryIssue = Number(options["registry-issue"]);
   if (!Number.isInteger(registryIssue) || registryIssue <= 0) throw new TrackerError("registry_selection_required");
-  const config = { schemaVersion: 1, repository: repository.full_name, owner: options.owner, ownerType, project: { ...project, number }, registryIssue, workflow: options.workflow ?? "agent-tracking.yml", codeRef: options.ref ?? repository.default_branch, fields };
+  const config = { schemaVersion: 1, repository: repository.full_name, owner: options.owner, ownerType, project: { ...project, number }, registryIssue, workflow: options.workflow ?? "agent-tracking.yml", codeRef: options.ref ?? repository.default_branch, fields, finalChecks: structuredClone(defaultFinalChecks) };
+  const priorFile = configPath(options);
+  if (fs.existsSync(priorFile)) {
+    const prior = JSON.parse(fs.readFileSync(priorFile, "utf8"));
+    if (prior.repository === config.repository && prior.project?.id === config.project.id && prior.finalChecks) config.finalChecks = prior.finalChecks;
+  }
+  checkFinalPolicy(config);
   const matches = github.pages(`repos/${config.repository}/issues/${registryIssue}/comments`).filter(comment => comment.body.startsWith(registryMarker));
   if (matches.length > 1) throw new TrackerError("registry_ambiguous");
   if (!matches.length) github.request(`repos/${config.repository}/issues/${registryIssue}/comments`, { method: "POST", body: { body: renderRegistry(initialState()) } });

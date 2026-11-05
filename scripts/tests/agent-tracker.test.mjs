@@ -335,7 +335,12 @@ test("partial discovery publication retries one event and retains terminal items
   });
   assert.equal(repo.run("discover", "--wait-seconds", "0").status, 0);
   const retained = JSON.parse(repo.run("show").stdout).remote.tickets;
-  assert.deepEqual(retained[210], terminal);
+  assert.equal(retained[210].status, "cancelled");
+  assert.equal(retained[210].result, "Explicitly cancelled by maintainer");
+  assert.equal(retained[210].activity, "inactive");
+  assert.equal(retained[210].agent, null);
+  assert.equal(retained[210].runId, null);
+  assert.equal(retained[210].nodeId, "I_210");
   assert.equal(retained[209], undefined);
 });
 

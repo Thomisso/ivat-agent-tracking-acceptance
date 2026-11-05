@@ -1,8 +1,9 @@
 import { buildActivityPayload } from "./activity.mjs";
+import { finalCommands, buildFinalPayload } from "./finalization.mjs";
 import { randomUUID } from "node:crypto";
 import { localBranchRevision } from "./evidence.mjs";
 import { TrackerError } from "./github.mjs";
-import { readRegistry } from "./state.mjs";
+import { readRegistry, projectionSynchronized } from "./state.mjs";
 import { validateEvent } from "./events.mjs";
 import { withJournal } from "./journal.mjs";
 import { lifecycleCommands, buildLifecyclePayload } from "./lifecycle.mjs";
@@ -14,6 +15,7 @@ export function runCommand(command, github, config, options) {
   return withJournal(config, (journal, save) => {
     if (command === "show") return options.local ? { ok: true, local: journal } : { ok: true, local: journal, remote: readRegistry(github, config).state };
     if (command === "sync") return sync(github, config, journal, save, options);
+    if (command === "final-handoff" && (journal.pending.length || !projectionSynchronized(readRegistry(github, config).state))) throw new TrackerError("synchronization_required");
     const at = options.at ?? new Date().toISOString();
     let event;
     if (command === "discover") {
@@ -57,17 +59,17 @@ export function runCommand(command, github, config, options) {
       if (!remote.owner || options["from-run"] !== remote.owner.runId || Number(options["from-generation"]) !== remote.owner.generation) throw new TrackerError("run_superseded");
       if (github.request("user").login !== remote.owner.account) throw new TrackerError("run_actor_mismatch");
       event = { id: randomUUID(), type: "takeover", runId: options.run ?? randomUUID(), generation: remote.generation, sequence: 0, at, payload: { fromRunId: remote.owner.runId, fromGeneration: remote.owner.generation, reason: options.reason, source: "takeover", localFacts: collectLocalFacts(remote, remote.owner.runId) } };
-    } else if (["repair", "observe-activity"].includes(command)) {
+    } else if (["repair", "reconcile", "observe-activity"].includes(command)) {
       event = { id: randomUUID(), type: command, at, payload: {} };
     } else if (command === "claim") {
       if (!journal.run) throw new TrackerError("owned_run_required");
       if (journal.stopRequested) throw new TrackerError("run_stop_pending");
       const branchRevision = localBranchRevision(options.branch);
       event = { id: randomUUID(), type: "claim", ...journal.run, sequence: journal.nextSequence, at, payload: { issue: Number(options.issue), agent: options.agent, branch: options.branch, branchRevision, ...(options.spec || options["integration-branch"] ? { integrationContext: { specification: Number(options.spec), branch: options["integration-branch"] } } : {}), result: options.result ?? "Implementation started" } };
-    } else if (command === "activity" || lifecycleCommands.includes(command)) {
+    } else if ((command === "activity" || [...lifecycleCommands, ...finalCommands].includes(command))) {
       if (!journal.run) throw new TrackerError("owned_run_required");
       if (journal.stopRequested) throw new TrackerError("run_stop_pending");
-      event = { id: randomUUID(), type: command, ...journal.run, sequence: journal.nextSequence, at, payload: command === "activity" ? buildActivityPayload(options) : buildLifecyclePayload(command, options, journal.lastConfirmed) };
+      event = { id: randomUUID(), type: command, ...journal.run, sequence: journal.nextSequence, at, payload: command === "activity" ? buildActivityPayload(options) : finalCommands.includes(command) ? buildFinalPayload(command, options) : buildLifecyclePayload(command, options, journal.lastConfirmed) };
     } else throw new TrackerError("command_unknown");
     validateEvent(event);
     if (["restart", "takeover"].includes(event.type)) {
@@ -76,7 +78,7 @@ export function runCommand(command, github, config, options) {
     }
     journal.pending.push(event);
     if (event.type === "stop") journal.stopRequested = event.id;
-    if (!["start", "restart", "takeover", "repair", "discover", "observe-activity"].includes(event.type)) journal.nextSequence++;
+    if (!["start", "restart", "takeover", "repair", "reconcile", "discover", "observe-activity"].includes(event.type)) journal.nextSequence++;
     save();
     const result = sync(github, config, journal, save, options);
     const outcome = journal.lastConfirmed?.receipts[event.id]?.outcome;

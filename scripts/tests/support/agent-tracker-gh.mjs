@@ -29,6 +29,22 @@ if (endpoint === "graphql") {
   const variables = input.variables ?? {};
   const value = variables.input ?? {};
   switch (operation) {
+    case "TrackerItemFields": {
+      const item = Object.values(remote.items).find(item => item.id === variables.id);
+      if (!item) { response = { node: null }; break; }
+      response = { node: { fieldValues: { nodes: Object.entries(item.values).filter(([,value]) => value !== null).map(([id, value]) => ({ field: { id }, ...(value.singleSelectOptionId ? { optionId: value.singleSelectOptionId } : { text: value.text }) })), pageInfo: { hasNextPage: false } } } }; break;
+    }
+    case "TrackerReady": {
+      const pr = Object.values(remote.pulls).find(pr => pr.node_id === value.pullRequestId);
+      if (pr.draft) remote.readyTransitions = (remote.readyTransitions ?? 0) + 1;
+      pr.draft = false;
+      if (remote.pushDuringReady) { pr.head.sha = remote.pushDuringReady; delete remote.pushDuringReady; }
+      response = { markPullRequestReadyForReview: { pullRequest: { id: pr.node_id, isDraft: false, headRefOid: pr.head.sha, baseRefName: pr.base.ref } } }; break;
+    }
+    case "TrackerRestoreDraft": {
+      const pr = Object.values(remote.pulls).find(pr => pr.node_id === value.pullRequestId); pr.draft = true;
+      response = { convertPullRequestToDraft: { pullRequest: { id: pr.node_id, isDraft: true } } }; break;
+    }
     case "TrackerFinalMerge": response = { repository: { issue: remote.finalMerges?.[variables.number] ?? { state: "OPEN", stateReason: null, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } }, timelineItems: { nodes: [] } } } }; break;
     case "TrackerDiscovery": {
       const all = Object.values(remote.issues ?? {}).filter(issue => issue.state === "OPEN" && issue.labels.includes("ready-for-agent"));
@@ -114,6 +130,15 @@ if (endpoint === "graphql") {
   const [base, head] = endpoint.slice("repos/example/project/compare/".length).split("...");
   const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", base, head]);
   response = { status: base === head ? "identical" : ancestor.status === 0 ? "ahead" : "diverged", merge_base_commit: { sha: execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() } };
+} else if (/^repos\/example\/project\/pulls\/\d+$/.test(endpoint)) {
+  response = remote.pulls?.[endpoint.split("/")[4]];
+  if (remote.pushOnPullRead && --remote.pushOnPullRead.remaining === 0) {
+    response.head.sha = remote.pushOnPullRead.sha;
+    delete remote.pushOnPullRead;
+  }
+  if (!response) { console.error("HTTP 404 Not Found"); process.exit(1); }
+} else if (/^repos\/example\/project\/issues\/\d+\/sub_issues$/.test(endpoint)) {
+  response = (remote.subIssues?.[endpoint.split("/")[4]] ?? []).slice((page - 1) * 100, page * 100).map(child => typeof child === "object" ? child : { number: child });
 } else if (/^repos\/example\/project\/issues\/\d+\/dependencies\/blocked_by$/.test(endpoint)) {
   const number = endpoint.split("/")[4];
   if (remote.issues?.[number]?.dependenciesUnavailable) { console.error("404 Not Found"); process.exit(1); }
