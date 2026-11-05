@@ -38,6 +38,10 @@ if (endpoint === "graphql") {
       const pr = Object.values(remote.pulls).find(pr => pr.node_id === value.pullRequestId);
       if (pr.draft) remote.readyTransitions = (remote.readyTransitions ?? 0) + 1;
       pr.draft = false;
+      if (remote.advanceTargetDuringReady) {
+        execFileSync("git", ["branch", "-f", "main", remote.advanceTargetDuringReady], { stdio: "pipe" });
+        delete remote.advanceTargetDuringReady;
+      }
       if (remote.pushDuringReady) { pr.head.sha = remote.pushDuringReady; delete remote.pushDuringReady; }
       response = { markPullRequestReadyForReview: { pullRequest: { id: pr.node_id, isDraft: false, headRefOid: pr.head.sha, baseRefName: pr.base.ref } } }; break;
     }
@@ -181,6 +185,12 @@ if (endpoint === "graphql") {
   if (injected?.phase === "after") { console.error("simulated connection failure after remote effect"); process.exit(1); }
   console.log(JSON.stringify({ workflow_run_id: 123, run_url: "https://api.github.com/repos/example/project/actions/runs/123", html_url: "https://github.com/example/project/actions/runs/123" }));
   process.exit(0);
+} else if (endpoint === "repos/other/repository/issues/200/comments") {
+  remote.foreignComments ??= [];
+  if (method === "POST") remote.foreignComments.push({ id: 9200, body: input.body });
+  response = method === "POST" ? remote.foreignComments.at(-1) : remote.foreignComments;
+} else if (endpoint === "repos/other/repository/issues/comments/9200" && method === "PATCH") {
+  remote.foreignComments[0].body = input.body; response = remote.foreignComments[0];
 } else if (/^repos\/example\/project\/issues\/\d+$/.test(endpoint)) {
   const number = Number(endpoint.split("/")[4]);
   response = { number, node_id: `I_${number}`, title: `Ticket ${number}`, body: remote.issueBodies?.[number] ?? "", html_url: `https://github.com/example/project/issues/${number}`, state: "open" };
