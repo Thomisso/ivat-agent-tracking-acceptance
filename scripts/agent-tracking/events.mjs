@@ -1,3 +1,4 @@
+import { discoverTickets } from "./discovery.mjs";
 import { TrackerError } from "./github.mjs";
 
 export function text(value, limit = 1000) {
@@ -8,7 +9,12 @@ export function text(value, limit = 1000) {
 export function validateEvent(event) {
   const allowed = ["id", "type", "runId", "generation", "sequence", "at", "payload"];
   if (!event || Object.keys(event).some(key => !allowed.includes(key)) || Buffer.byteLength(JSON.stringify(event)) > 8 * 1024) throw new TrackerError("event_invalid");
-  text(event.id, 100); text(event.runId, 100);
+  text(event.id, 100);
+  if (event.type === "discover") {
+    if (!/^[\w-]+$/.test(event.id) || Object.keys(event).some(key => !["id", "type", "at", "payload"].includes(key)) || !Number.isFinite(Date.parse(event.at)) || new Date(event.at).toISOString() !== event.at || !event.payload || typeof event.payload !== "object" || Array.isArray(event.payload) || Object.keys(event.payload).some(key => key !== "parent") || (event.payload.parent !== undefined && (!Number.isInteger(event.payload.parent) || event.payload.parent <= 0))) throw new TrackerError("event_invalid");
+    return event;
+  }
+  text(event.runId, 100);
   if (!/^[\w-]+$/.test(event.id) || !/^[\w-]+$/.test(event.runId) || !Number.isInteger(event.generation) || event.generation < 0 || !Number.isInteger(event.sequence) || event.sequence < 0 || !Number.isFinite(Date.parse(event.at)) || new Date(event.at).toISOString() !== event.at || !event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) throw new TrackerError("event_invalid");
   if (event.type === "start") {
     if (Object.keys(event.payload).length || event.sequence !== 0) throw new TrackerError("event_invalid");
@@ -21,7 +27,11 @@ export function validateEvent(event) {
 
 export function applyEvent(state, event, { github, config, actor }) {
   validateEvent(event);
-  if (event.type === "start") {
+  if (event.type === "discover") {
+    discoverTickets(state, { github, config, at: event.at });
+    state.membershipDiscovered = true;
+    if (event.payload.parent) state.selectedParent = event.payload.parent;
+  } else if (event.type === "start") {
     if (state.owner) throw new TrackerError("run_already_owned");
     if (event.generation !== state.generation) throw new TrackerError("run_superseded");
     state.generation++;
@@ -30,13 +40,15 @@ export function applyEvent(state, event, { github, config, actor }) {
     if (!state.owner || state.owner.runId !== event.runId || state.owner.generation !== event.generation) throw new TrackerError("run_superseded");
     if (state.owner.account !== actor) throw new TrackerError("run_actor_mismatch");
     if (event.sequence !== state.owner.sequence + 1) throw new TrackerError("event_out_of_order");
-    if (state.tickets[event.payload.issue]) throw new TrackerError("ticket_already_claimed");
+    const existing = state.tickets[event.payload.issue];
+    if (existing?.runId || existing?.agent) throw new TrackerError("ticket_already_claimed");
+    if (existing?.role === "specification") throw new TrackerError("implementation_issue_required");
     const issue = github.request(`repos/${config.repository}/issues/${event.payload.issue}`);
     if (issue.pull_request || issue.state !== "open") throw new TrackerError("implementation_issue_required");
-    let parent = null;
-    try { parent = github.request(`repos/${config.repository}/issues/${issue.number}/parent`)?.number ?? null; } catch (error) { if (error.code !== "github_not_found") throw error; }
+    let parent = existing?.parent ?? null;
+    try { parent = github.request(`repos/${config.repository}/issues/${issue.number}/parent`)?.number ?? parent; } catch (error) { if (error.code !== "github_not_found") throw error; }
     state.tickets[issue.number] = {
-      number: issue.number, nodeId: issue.node_id, title: issue.title, url: issue.html_url, parent,
+      ...existing, role: "implementation", number: issue.number, nodeId: issue.node_id, title: issue.title, url: issue.html_url, parent,
       account: state.owner.account, agent: event.payload.agent, reviewer: null, branch: event.payload.branch, workingRevision: event.payload.branchRevision,
       pullRequest: null, status: "implementing", activity: "unverified", stateAt: event.at, activityAt: null,
       result: event.payload.result, runId: event.runId, generation: event.generation, revision: state.revision + 1,

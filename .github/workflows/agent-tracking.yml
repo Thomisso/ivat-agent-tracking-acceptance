@@ -1,6 +1,11 @@
 name: Agent tracking
 
 on:
+  issues:
+    types: [opened, edited, labeled, unlabeled, reopened, closed, transferred]
+  # Backlog membership has its own reconciliation, independent of freshness.
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       event:

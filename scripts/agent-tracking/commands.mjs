@@ -43,7 +43,9 @@ export function runCommand(command, github, config, options) {
     if (command === "sync") return sync(github, config, journal, save, options);
     const at = options.at ?? new Date().toISOString();
     let event;
-    if (command === "start") {
+    if (command === "discover") {
+      event = { id: randomUUID(), type: "discover", at, payload: options.parent ? { parent: Number(options.parent) } : {} };
+    } else if (command === "start") {
       if (journal.pending.length) throw new TrackerError("pending_events_require_sync");
       validateConfig(github, config);
       const remote = readRegistry(github, config).state;
@@ -59,7 +61,7 @@ export function runCommand(command, github, config, options) {
     } else throw new TrackerError("command_unknown");
     validateEvent(event);
     journal.pending.push(event);
-    if (command !== "start") journal.nextSequence++;
+    if (!["start", "discover"].includes(command)) journal.nextSequence++;
     save();
     return sync(github, config, journal, save, options);
   });
