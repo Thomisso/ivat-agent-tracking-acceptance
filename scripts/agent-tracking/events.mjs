@@ -77,6 +77,7 @@ export function applyEvent(state, event, { github, config, actor }) {
       if ((existing?.runId || existing?.agent) && !historical) throw new TrackerError("ticket_already_claimed");
       if (existing?.role === "specification") throw new TrackerError("implementation_issue_required");
       if (existing && existing.status !== "ready" && !historical) throw new TrackerError("ticket_not_ready");
+      if (historical && ["review", "integrated"].includes(existing.blockage?.resumePhase ?? existing.status) && event.payload.branchRevision !== existing.review?.revision) throw new TrackerError("historical_revision_mismatch");
       const requestedContext = event.payload.integrationContext;
       if (existing?.integrationContext && requestedContext && (existing.integrationContext.specification !== requestedContext.specification || existing.integrationContext.branch !== requestedContext.branch)) throw new TrackerError("integration_context_mismatch");
       const integrationContext = existing?.integrationContext ?? requestedContext ?? null;
@@ -92,7 +93,7 @@ export function applyEvent(state, event, { github, config, actor }) {
         ...existing, ...(dependencies ? { dependencies } : {}),
         role: "implementation", repository: config.repository, number: issue.number, nodeId: issue.node_id, title: issue.title, url: issue.html_url, parent,
         account: state.owner.account, agent: event.payload.agent, reviewer: historical ? existing.reviewer ?? null : null, branch: event.payload.branch, workingRevision: event.payload.branchRevision,
-        integrationContext, pullRequest: historical ? existing.pullRequest ?? null : null, status: historical ? existing.status : "implementing", activity: "unverified", stateAt: historical ? existing.stateAt : event.at, activityAt: null,
+        integrationContext, pullRequest: historical ? existing.pullRequest ?? null : null, status: historical ? existing.status : "implementing", activity: historical && existing.status !== "implementing" ? "inactive" : "unverified", stateAt: historical ? existing.stateAt : event.at, activityAt: null,
         result: event.payload.result, runId: event.runId, generation: event.generation, revision: state.revision + 1,
       };
       state.owner.sequence = event.sequence;
