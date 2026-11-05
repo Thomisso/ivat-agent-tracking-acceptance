@@ -10,20 +10,25 @@ export function loadConfig(options = {}) {
   if (!fs.existsSync(file)) throw new TrackerError("configuration_missing");
   let config;
   try { config = JSON.parse(fs.readFileSync(file, "utf8")); } catch { throw new TrackerError("configuration_invalid"); }
-  if (config.schemaVersion !== 1 || !/^[\w.-]+\/[\w.-]+$/.test(config.repository) || !Number.isInteger(config.registryIssue) || !config.project?.id || !config.fields || !config.workflow || !config.codeRef) throw new TrackerError("configuration_invalid");
+  if (config.schemaVersion !== 1 || !/^[\w.-]+\/[\w.-]+$/.test(config.repository) || !Number.isInteger(config.registryIssue) || config.registryIssue <= 0 || !config.project?.id || !Number.isInteger(config.project.number) || config.project.number <= 0 || !config.fields || !/^[\w.-]+\.ya?ml$/.test(config.workflow ?? "") || !config.codeRef) throw new TrackerError("configuration_invalid");
+  const definitions = { status: statuses, activity: activities, ...Object.fromEntries(Object.keys(textFields).map(key => [key, null])) };
+  for (const [key, options] of Object.entries(definitions)) {
+    const field = config.fields[key];
+    if (!field?.id || !field.name || (options && Object.keys(options).some(option => !field.options?.[option]))) throw new TrackerError("configuration_invalid");
+  }
   return config;
 }
 
 export function validateConfig(github, config) {
   const repository = github.request(`repos/${config.repository}`);
-  if (repository.full_name.toLowerCase() !== config.repository.toLowerCase()) throw new TrackerError("repository_mismatch");
+  if (repository.full_name.toLowerCase() !== config.repository.toLowerCase() || repository.owner.login.toLowerCase() !== config.owner.toLowerCase() || repository.owner.type !== config.ownerType) throw new TrackerError("repository_mismatch");
   const project = github.project(config.owner, config.project.number, config.ownerType);
   if (!project || project.id !== config.project.id) throw new TrackerError("project_mismatch");
   const result = github.fields(project.id);
   if (result.pageInfo.hasNextPage) throw new TrackerError("project_fields_exceed_limit");
   for (const field of Object.values(config.fields)) {
     const actual = result.nodes.find(item => item.id === field.id && item.name === field.name);
-    if (!actual) throw new TrackerError("field_configuration_mismatch");
+    if (!actual || actual.dataType !== (field.options ? "SINGLE_SELECT" : "TEXT")) throw new TrackerError("field_configuration_mismatch");
     for (const [key, id] of Object.entries(field.options ?? {})) {
       const name = field.name === "Status" ? statuses[key] : activities[key];
       if (!actual.options?.some(option => option.id === id && option.name === name)) throw new TrackerError("field_configuration_mismatch");

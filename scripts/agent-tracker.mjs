@@ -10,7 +10,7 @@ try {
   for (let index = 0; index < args.length; index++) {
     if (!args[index].startsWith("--")) throw new TrackerError("arguments_invalid");
     const key = args[index].slice(2);
-    if (key === "disable-native-workflows") options[key] = true;
+    if (["disable-native-workflows", "local"].includes(key)) options[key] = true;
     else {
       if (args[index + 1] === undefined || args[index + 1].startsWith("--")) throw new TrackerError("arguments_invalid");
       options[key] = args[++index];
@@ -28,6 +28,7 @@ try {
     else result = runCommand(command, github, config, options);
   }
   console.log(JSON.stringify(result));
+  if (result.ok === false) process.exitCode = 1;
 } catch (error) {
   console.error(JSON.stringify({ ok: false, error: error instanceof TrackerError ? error.code : "tracker_failed" }));
   process.exitCode = 1;

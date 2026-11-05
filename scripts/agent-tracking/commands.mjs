@@ -4,6 +4,7 @@ import { TrackerError } from "./github.mjs";
 import { readRegistry } from "./state.mjs";
 import { validateEvent } from "./events.mjs";
 import { withJournal } from "./journal.mjs";
+import { validateConfig } from "./config.mjs";
 
 function sync(github, config, journal, save, options) {
   const seconds = Number(options["wait-seconds"] ?? 120);
@@ -19,6 +20,7 @@ function sync(github, config, journal, save, options) {
       let remote;
       try { remote = readRegistry(github, config).state; } catch { throw new TrackerError("publication_pending"); }
       const receipt = remote.receipts[event.id];
+      journal.lastConfirmed = remote;
       if (receipt?.state === "published") {
         if (event.type === "start") journal.run = { runId: event.runId, generation: receipt.generation };
         journal.pending.shift(); journal.publishedRevision = remote.publishedRevision; save();
@@ -37,12 +39,13 @@ function sync(github, config, journal, save, options) {
 
 export function runCommand(command, github, config, options) {
   return withJournal(config, (journal, save) => {
-    if (command === "show") return { ok: true, local: journal, remote: readRegistry(github, config).state };
+    if (command === "show") return options.local ? { ok: true, local: journal } : { ok: true, local: journal, remote: readRegistry(github, config).state };
     if (command === "sync") return sync(github, config, journal, save, options);
     const at = options.at ?? new Date().toISOString();
     let event;
     if (command === "start") {
       if (journal.pending.length) throw new TrackerError("pending_events_require_sync");
+      validateConfig(github, config);
       const remote = readRegistry(github, config).state;
       if (remote.owner) throw new TrackerError("run_already_owned");
       event = { id: randomUUID(), type: "start", runId: options.run ?? randomUUID(), generation: remote.generation, sequence: 0, at, payload: {} };

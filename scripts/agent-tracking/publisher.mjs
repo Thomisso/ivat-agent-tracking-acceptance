@@ -1,6 +1,8 @@
 import { TrackerError } from "./github.mjs";
 import { readRegistry, writeRegistry, textFields } from "./state.mjs";
 import { applyEvent, validateEvent } from "./events.mjs";
+import { createHash } from "node:crypto";
+import { validateConfig } from "./config.mjs";
 
 function setFields(github, config, itemId, record) {
   const values = { status: record.status, activity: record.activity, ...Object.fromEntries(Object.keys(textFields).map(key => [key, record[key] ?? null])) };
@@ -33,16 +35,21 @@ export function processWorker(github, config, event, environment = process.env) 
   if (environment.GITHUB_ACTIONS !== "true" || environment.GITHUB_JOB !== "publish" || !environment.GITHUB_WORKFLOW_REF?.startsWith(`${config.repository}/.github/workflows/${config.workflow}@`)) throw new TrackerError("serialized_worker_required");
   if (!/^[\w-]+$/.test(environment.GITHUB_ACTOR ?? "")) throw new TrackerError("worker_actor_invalid");
   validateEvent(event);
+  validateConfig(github, config);
   const { commentId, state } = readRegistry(github, config);
   const previous = state.receipts[event.id];
+  const fingerprint = createHash("sha256").update(JSON.stringify(event)).digest("hex");
+  if (previous?.fingerprint && previous.fingerprint !== fingerprint) throw new TrackerError("event_identity_conflict");
   if (!previous) {
     try { applyEvent(state, event, { github, config, actor: environment.GITHUB_ACTOR }); }
     catch (error) {
       if (!(error instanceof TrackerError) || error.code.startsWith("github_")) throw error;
-      state.receipts[event.id] = { state: "rejected", error: error.code, runId: event.runId, generation: event.generation, sequence: event.sequence, revision: state.revision };
+      if (state.owner?.runId === event.runId && state.owner.generation === event.generation && state.owner.account === environment.GITHUB_ACTOR && event.sequence === state.owner.sequence + 1) state.owner.sequence = event.sequence;
+      state.receipts[event.id] = { state: "rejected", error: error.code, runId: event.runId, generation: event.generation, sequence: event.sequence, revision: state.revision, fingerprint };
       writeRegistry(github, config, commentId, state);
       return { ok: false, error: error.code };
     }
+    state.receipts[event.id].fingerprint = fingerprint;
     // Canonical intent is durable before any multi-effect Project projection.
     writeRegistry(github, config, commentId, state);
   } else if (previous.state === "rejected") return { ok: false, error: previous.error };
